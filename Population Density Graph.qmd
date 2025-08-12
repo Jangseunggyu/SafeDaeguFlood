@@ -1,0 +1,43 @@
+--- 
+title: "대구관련 프로젝트"
+author: "장승규"
+format: dashboard
+--- 
+
+```{python}
+
+df = pd.read_csv("C:\\Users\\USER\\Desktop\\cvs\\대구광역시 중구_행정동별 주민등록 인구통계_20231231 (1).csv", encoding='cp949')
+
+import pandas as pd
+import plotly.express as px
+
+# 인구밀도 계산
+df['인구밀도'] = df['전체인구수'] / df['면적']
+
+# 막대 그래프 (행정동별 인구밀도)
+fig = px.bar(
+    df,
+    x='행정동명',
+    y='인구밀도',
+    color='인구밀도',
+    color_continuous_scale='Viridis',
+    hover_data={
+        '시군구명': True,
+        '전체인구수': True,
+        '면적': True,
+        '인구밀도': ':.1f'  # 소수점 1자리 표시
+    },
+    title='대구시 행정동별 인구밀도(명/㎢)'
+)
+
+# 레이아웃 설정 (한글 폰트, 축 라벨)
+fig.update_layout(
+    font=dict(family='NanumGothic, Arial', size=14),
+    xaxis_title='행정동명',
+    yaxis_title='인구밀도 (명/㎢)',
+    coloraxis_colorbar=dict(title="인구밀도")
+)
+
+fig.show()
+```
+
