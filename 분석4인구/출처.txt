@@ -1,0 +1,13 @@
+
+
+4. 취약계층
+
+(1)행정구역별 인구밀도
+https://www.daegu.go.kr/index.do?menu_id=00000253
+
+(2)동·읍·면_연령별_주민등록인구_내국인_전체연령_20250812133656
+https://kosis.daegu.go.kr/statHtml/statHtml.do?orgId=203&tblId=DT_203N100020&lang_mode=ko&vw_cd=MT_OTITLE&list_id=203_B203_05&conn_path=I4
+
+
+(3)동·읍·면별_내·외국인_20250812141415
+https://kosis.daegu.go.kr/statHtml/statHtml.do?orgId=203&tblId=DT_203N100015&lang_mode=ko&vw_cd=MT_OTITLE&list_id=203_B203_05&conn_path=I4
