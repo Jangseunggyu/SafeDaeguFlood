@@ -1,0 +1,306 @@
+---
+title: "대구 시각화 프로젝트"
+author: "J"
+format: dashboard
+---
+
+```{python}
+
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+from scipy.stats import uniform
+from scipy.stats import norm
+from scipy.stats import binom
+import scipy.stats as sp
+from scipy.stats import t
+import scipy.stats as stats
+from scipy import stats
+
+import math
+from collections import Counter
+from scipy.integrate import quad
+from scipy.stats import uniform, norm, binom, poisson, expon, gamma, t, chi2, f, beta
+from scipy.stats import bernoulli
+from scipy.stats import ttest_rel
+
+plt.rcParams['font.family'] = 'Malgun Gothic'
+plt.rcParams['axes.unicode_minus'] = False
+
+import plotly.express as px
+import plotly.graph_objects as go
+import geopandas as gpd
+import json 
+```
+
+() 대구광역시 행정구 지도
+
+```{python}
+# 통계청_SGIS 행정구역 통계 및 경계
+# https://www.data.go.kr/data/15129688/fileData.do
+
+# shp 파일 경로 지정
+shp_path = './data/bnd_dong_00_2024_2Q.shp'  
+
+# shp 파일 읽기
+gdf = gpd.read_file(shp_path)
+# gdf.info()
+
+
+dong_list = [
+    "삼덕동","성내1동","성내2동","성내3동","대신동","남산1동","남산2동","남산3동","남산4동","대봉1동","대봉2동","동인동",
+    "신암1동","신암2동","신암3동","신암4동","신암5동","신천1·2동","신천3동","신천4동","효목1동","효목2동","도평동","불로·봉무동","지저동","동촌동","방촌동","해안동","공산동","안심1동","안심2동","안심3동","안심4동","혁신동",
+    "내당1동","내당2·3동","내당4동","비산1동","비산2·3동","비산4동","비산5동","비산6동","비산7동","평리1동","평리2동","평리3동","평리4동","평리5동","평리6동","상중이동","원대동",
+    "이천동","봉덕1동","봉덕2동","봉덕3동","대명1동","대명2동","대명3동","대명4동","대명5동","대명6동","대명9동","대명10동","대명11동",
+    "고성동","칠성동","침산1동","침산2동","침산3동","산격1동","산격2동","산격3동","산격4동","복현1동","복현2동","검단동","무태조야동","태전2동","관문동","읍내동","관음동","태전1동","구암동","노원동","동천동","국우동","대현동",
+    "범어1동","범어2동","범어3동","범어4동","만촌1동","만촌2동","만촌3동","수성1가동","수성2·3가동","수성4가동","황금1동","황금2동","중동","상동","파동","두산동","지산1동","지산2동","범물1동","범물2동","고산1동","고산2동","고산3동",
+    "두류3동","본리동","감삼동","죽전동","장기동","이곡1동","신당동","월성2동","상인1동","상인2동","상인3동","도원동","송현1동","송현2동","본동","용산1동","용산2동","이곡2동","성당동","두류1·2동","월성1동","진천동","유천동",
+    "화원읍","논공읍","다사읍","유가읍","옥포읍","현풍읍","가창면","하빈면","구지면",
+    "군위읍","소보면","효령면","부계면","우보면","의흥면","산성면","삼국유사면"
+]
+
+# 중구: Jung_gu
+# 동구: Dong_gu
+# 서구: Seo_gu
+# 남구: Nam_gu
+# 북구: Buk_gu
+# 수성구: Suseong_gu
+# 달서구: Dalseo_gu
+# 달성군: Dalseong_gun
+# 군위군: Gunwi_gun
+
+Jung_gu = ["삼덕동","성내1동","성내2동","성내3동","대신동","남산1동","남산2동","남산3동","남산4동","대봉1동","대봉2동","동인동",]
+Dong_gu = ["신암1동","신암2동","신암3동","신암4동","신암5동","신천1·2동","신천3동","신천4동","효목1동","효목2동","도평동","불로·봉무동","지저동","동촌동","방촌동","해안동","공산동","안심1동","안심2동","안심3동","안심4동","혁신동",]
+Seo_gu = ["내당1동","내당2·3동","내당4동","비산1동","비산2·3동","비산4동","비산5동","비산6동","비산7동","평리1동","평리2동","평리3동","평리4동","평리5동","평리6동","상중이동","원대동",]
+Nam_gu = ["이천동","봉덕1동","봉덕2동","봉덕3동","대명1동","대명2동","대명3동","대명4동","대명5동","대명6동","대명9동","대명10동","대명11동",]
+Buk_gu = ["고성동","칠성동","침산1동","침산2동","침산3동","산격1동","산격2동","산격3동","산격4동","복현1동","복현2동","검단동","무태조야동","태전2동","관문동","읍내동","관음동","태전1동","구암동","노원동","동천동","국우동","대현동",]
+Suseong_gu = ["범어1동","범어2동","범어3동","범어4동","만촌1동","만촌2동","만촌3동","수성1가동","수성2·3가동","수성4가동","황금1동","황금2동","중동","상동","파동","두산동","지산1동","지산2동","범물1동","범물2동","고산1동","고산2동","고산3동",]
+Dalseo_gu = ["두류3동","본리동","감삼동","죽전동","장기동","이곡1동","신당동","월성2동","상인1동","상인2동","상인3동","도원동","송현1동","송현2동","본동","용산1동","용산2동","이곡2동","성당동","두류1·2동","월성1동","진천동","유천동",]
+Dalseong_gun = ["화원읍","논공읍","다사읍","유가읍","옥포읍","현풍읍","가창면","하빈면","구지면",]
+Gunwi_gun = ["군위읍","소보면","효령면","부계면","우보면","의흥면","산성면","삼국유사면"]
+
+print(f'중구:', Jung_gu)
+print(f'동구:', Dong_gu)
+print(f'서구:', Seo_gu)
+print(f'남구:', Nam_gu)
+print(f'북구:', Buk_gu)
+print(f'수성구:', Suseong_gu)
+print(f'달서구:', Dalseo_gu)
+print(f'달성군:', Dalseong_gun)
+print(f'군위군:', Gunwi_gun)
+
+
+daegu_gdf = gdf[gdf['ADM_NM'].isin(dong_list)].copy()
+# daegu_gdf.info()
+# daegu_gdf.head()
+# daegu_gdf.crs  # 좌표계 확인
+
+Jung_gu_gdf = gdf[gdf['ADM_NM'].isin(Jung_gu)].copy()
+Dong_gu_gdf = gdf[gdf['ADM_NM'].isin(Dong_gu)].copy()
+Seo_gu_gdf = gdf[gdf['ADM_NM'].isin(Seo_gu)].copy()
+Nam_gu_gdf = gdf[gdf['ADM_NM'].isin(Nam_gu)].copy()
+Buk_gu_gdf = gdf[gdf['ADM_NM'].isin(Buk_gu)].copy()
+Suseong_gu_gdf = gdf[gdf['ADM_NM'].isin(Suseong_gu)].copy()
+Dalseo_gu_gdf = gdf[gdf['ADM_NM'].isin(Dalseo_gu)].copy()
+Dalseong_gun_gdf = gdf[gdf['ADM_NM'].isin(Dalseong_gun)].copy()
+Gunwi_gun_gdf = gdf[gdf['ADM_NM'].isin(Gunwi_gun)].copy()
+
+
+
+jung_gu_boundary = Jung_gu_gdf.dissolve()
+dong_gu_boundary = Dong_gu_gdf.dissolve()
+seo_gu_boundary = Seo_gu_gdf.dissolve()
+nam_gu_boundary = Nam_gu_gdf.dissolve()
+buk_gu_boundary = Buk_gu_gdf.dissolve()
+suseong_gu_boundary = Suseong_gu_gdf.dissolve()
+dalseo_gu_boundary = Dalseo_gu_gdf.dissolve()
+dalseong_gun_boundary = Dalseong_gun_gdf.dissolve()
+gunwi_gun_boundary = Gunwi_gun_gdf.dissolve()
+
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(12, 8))
+jung_gu_boundary.plot(edgecolor='black', facecolor='none', linewidth=2, label='Jung-gu')
+dong_gu_boundary.plot(edgecolor='red', facecolor='none', linewidth=2, label='Dong-gu')
+seo_gu_boundary.plot(edgecolor='blue', facecolor='none', linewidth=2, label='Seo-gu')
+nam_gu_boundary.plot(edgecolor='green', facecolor='none', linewidth=2, label='Nam-gu')
+buk_gu_boundary.plot(edgecolor='orange', facecolor='none', linewidth=2, label='Buk-gu')
+suseong_gu_boundary.plot(edgecolor='purple', facecolor='none', linewidth=2, label='Suseong-gu')
+dalseo_gu_boundary.plot(edgecolor='brown', facecolor='none', linewidth=2, label='Dalseo-gu')
+dalseong_gun_boundary.plot(edgecolor='pink', facecolor='none', linewidth=2, label='Dalseong-gun')
+gunwi_gun_boundary.plot(edgecolor='gray', facecolor='none', linewidth=2, label='Gunwi-gun')
+
+plt.legend()
+plt.title("대구시 구별 경계 (병합)")
+plt.axis('off')
+plt.show()
+```
+
+## 4. 취약계층
+
+\(1\) 행정구역별 인구밀도
+
+```{python}
+# 행정구역별 인구밀도
+# https://www.daegu.go.kr/index.do?menu_id=00000253
+
+dens = pd.read_csv('./data/4_1_dens.csv')
+# dens.info()
+# dens.head()
+
+# 대구시 내 전체 인구밀도 상위 20개 읍면동
+dens['인구밀도(명/㎢)'] = dens['인구(명)'] / dens['면적(㎢)']
+dens_sorted = dens.sort_values(by='인구밀도(명/㎢)', ascending=False)
+
+# dens_sorted[['행정구', '읍면동', '인구(명)', '면적(㎢)', '인구밀도(명/㎢)']].head(10)
+
+# 시각화
+plt.figure(figsize=(10, 6))
+top20 = dens_sorted.head(20)
+plt.barh(top20['읍면동'], top20['인구밀도(명/㎢)'], color='skyblue')
+plt.xlabel('인구밀도 (명/㎢)')
+plt.ylabel('읍면동')
+plt.title('대구시 읍면동별 인구밀도 상위 20')
+plt.gca().invert_yaxis()  # 높은 값이 위로 오도록
+plt.tight_layout()
+plt.show()
+
+
+# 행정구 단위
+admin_dens = dens.groupby('행정구').agg({
+    '인구(명)': 'sum',
+    '면적(㎢)': 'sum'}).reset_index()
+
+admin_dens['인구밀도(명/㎢)'] = admin_dens['인구(명)'] / admin_dens['면적(㎢)']
+admin_dens_sorted = admin_dens.sort_values(by='인구밀도(명/㎢)', ascending=False)
+
+print(admin_dens_sorted)
+
+# 시각화
+plt.figure(figsize=(8, 6))
+plt.bar(admin_dens_sorted['행정구'], admin_dens_sorted['인구밀도(명/㎢)'], color='orange')
+plt.xlabel('행정구')
+plt.ylabel('인구밀도 (명/㎢)')
+plt.title('대구시 행정구별 인구밀도')
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+```
+
+<!-- \(2\) 어린이, 노약자 인구 -->
+
+```{python}
+# 동·읍·면_연령별_주민등록인구_내국인_전체연령_20250812133656
+# https://kosis.daegu.go.kr/statHtml/statHtml.do?orgId=203&tblId=DT_203N100020&lang_mode=ko&vw_cd=MT_OTITLE&list_id=203_B203_05&conn_path=I4
+
+age = pd.read_csv('./data/4_2_age.csv')
+# age.info()
+# age.head()
+```
+
+<!-- \(3\) 외국인 인구 -->
+
+```{python}
+# 동·읍·면별_내·외국인_20250812141415
+# https://kosis.daegu.go.kr/statHtml/statHtml.do?orgId=203&tblId=DT_203N100015&lang_mode=ko&vw_cd=MT_OTITLE&list_id=203_B203_05&conn_path=I4
+
+fore = pd.read_csv('./data/4_3_foreign.csv')
+# fore.info()
+# fore.head()
+```
+
+
+() 고령자 + 외국인
+
+```{python}
+# 1) 'age', 'fore' 숫자형 변환
+age['계'] = pd.to_numeric(age['계'], errors='coerce')
+age['연령'] = age['연령'].astype(str)  # 연령 정보 문자 확인용
+
+fore['총인구'] = pd.to_numeric(fore['총인구'], errors='coerce')
+fore['외국인'] = pd.to_numeric(fore['외국인'], errors='coerce')
+
+# 2) 고령자(65세 이상) 인구 추출 및 읍면동별 합산
+age_65 = age[age['연령'].str.contains('65|70|75|80|85|90|95|100')]
+age_65_sum = age_65.groupby(['행정구역', '동읍면'])['계'].sum().reset_index().rename(columns={'계':'고령자수'})
+
+# 3) 외국인 비율 계산 (읍면동별)
+fore_sum = fore.groupby(['행정구역', '동읍면']).sum(numeric_only=True).reset_index()
+fore_sum['외국인비율'] = fore_sum['외국인'] / fore_sum['총인구']
+
+# 4) dens와 고령자, 외국인 비율 데이터 병합
+df_merge = dens.merge(age_65_sum, left_on=['행정구', '읍면동'], right_on=['행정구역', '동읍면'], how='left')
+df_merge = df_merge.merge(fore_sum[['행정구역', '동읍면', '외국인비율']], left_on=['행정구', '읍면동'], right_on=['행정구역', '동읍면'], how='left')
+
+# 5) 결측치 처리 및 우선 대응지역 필터링 (예시)
+df_merge['고령자수'] = df_merge['고령자수'].fillna(0)
+df_merge['외국인비율'] = df_merge['외국인비율'].fillna(0)
+
+# 예) 인구밀도 상위 20%, 고령자수 상위 30%, 외국인비율 10% 이상 조건 부여
+pop_density_thresh = df_merge['인구밀도(명/㎢)'].quantile(0.8)
+elderly_thresh = df_merge['고령자수'].quantile(0.7)
+foreign_thresh = 0.1
+
+priority_areas = df_merge[
+    (df_merge['인구밀도(명/㎢)'] >= pop_density_thresh) &
+    (df_merge['고령자수'] >= elderly_thresh) &
+    (df_merge['외국인비율'] >= foreign_thresh)
+]
+
+# print("우선 침수 대응 필요 지역:")
+print(priority_areas[['행정구', '읍면동', '인구밀도(명/㎢)', '고령자수', '외국인비율']])
+```
+
+
+() 인구밀도 + 고령자 + 외국인
+
+```{python}
+from sklearn.preprocessing import MinMaxScaler
+
+
+# 결측치 처리
+df_merge['고령자수'] = df_merge['고령자수'].fillna(0)
+df_merge['외국인비율'] = df_merge['외국인비율'].fillna(0)
+
+# 사용할 컬럼 추출
+risk_df = df_merge[['행정구', '읍면동', '인구밀도(명/㎢)', '고령자수', '외국인비율']].copy()
+
+# inf 값 → NaN 변환
+risk_df[['인구밀도(명/㎢)', '고령자수', '외국인비율']] = risk_df[['인구밀도(명/㎢)', '고령자수', '외국인비율']].replace([np.inf, -np.inf], np.nan)
+
+# NaN 채우기 (예: 0으로 채움, 또는 평균/중앙값으로)
+risk_df = risk_df.fillna(0)
+
+
+# 정규화 (Min-Max scaling)
+from sklearn.preprocessing import MinMaxScaler
+scaler = MinMaxScaler()
+risk_df[['인구밀도_norm', '고령자수_norm', '외국인비율_norm']] = scaler.fit_transform(
+    risk_df[['인구밀도(명/㎢)', '고령자수', '외국인비율']])
+
+
+# 가중치 지정
+weights = {
+    '인구밀도_norm': 0.4,
+    '고령자수_norm': 0.4,
+    '외국인비율_norm': 0.2
+}
+
+# 위험도 점수 계산
+risk_df['위험도점수'] = (
+    risk_df['인구밀도_norm'] * weights['인구밀도_norm'] +
+    risk_df['고령자수_norm'] * weights['고령자수_norm'] +
+    risk_df['외국인비율_norm'] * weights['외국인비율_norm']
+)
+
+# 위험도 점수 상위 10개 지역 출력
+top_risk_areas = risk_df.sort_values(by='위험도점수', ascending=False).head(10)
+
+print(top_risk_areas[['행정구', '읍면동', '위험도점수']])
+
+
+```
+
+
