@@ -1,0 +1,491 @@
+
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+from scipy.stats import uniform
+from scipy.stats import norm
+from scipy.stats import binom
+import scipy.stats as sp
+from scipy.stats import t
+import scipy.stats as stats
+from scipy import stats
+
+import math
+from collections import Counter
+from scipy.integrate import quad
+from scipy.stats import uniform, norm, binom, poisson, expon, gamma, t, chi2, f, beta
+from scipy.stats import bernoulli
+from scipy.stats import ttest_rel
+
+plt.rcParams['font.family'] = 'Malgun Gothic'
+plt.rcParams['axes.unicode_minus'] = False
+
+import plotly.express as px
+import plotly.graph_objects as go
+import geopandas as gpd
+import json 
+
+from sklearn.preprocessing import MinMaxScaler
+scaler = MinMaxScaler()
+
+
+############################################################
+
+
+# 4. 인구 요인 ############################################################
+
+
+# (1) 4_1_dens ############################################################
+
+# 행정구역별 인구밀도
+# https://www.daegu.go.kr/index.do?menu_id=00000253
+
+dens = pd.read_csv('./data/4_1_dens.csv')
+dens.info()
+dens.head()
+
+dens = dens[dens['읍면동'] != '소계']
+# len(dens['행정구'].unique())
+
+
+
+# (1) 읍면동 단위
+dens['인구밀도'] = (dens['인구(명)'] / dens['면적(㎢)']).round(2)
+
+
+
+# (2) 행정구 단위: 각 행정구의 (총 인구 / 총 면적) 기준 인구밀도
+gu_dens = dens[['행정구','인구(명)','면적(㎢)']].groupby(['행정구'])
+
+gu_dens_sum = gu_dens.sum().reset_index().rename(columns={'index': '행정구'})
+gu_dens_sum['인구밀도'] = (gu_dens_sum['인구(명)'] / gu_dens_sum['면적(㎢)']).round(2)
+
+
+
+# (3) sort -> 그래프 시각화
+
+## 대구 전체 읍면동 인구밀도
+scaler = MinMaxScaler()
+dens['읍면동 인구밀도_norm'] = scaler.fit_transform(dens[['인구밀도']])
+# 읍면동 인구밀도 상위 10
+dens_sort = dens[['행정구','읍면동','인구(명)','면적(㎢)','인구밀도','읍면동 인구밀도_norm']]
+dens_sort.sort_values(['인구밀도'], ascending=False).head(10)
+# 읍면동 인구밀도 하위 10
+# dens_sort.sort_values(['인구밀도'], ascending=True).head(10)
+
+## 행정구 인구밀도 내림차순
+gu_dens_sum.sort_values(['인구밀도'], ascending=False)
+
+
+
+# (4) norm 활용 -> 지도 히트맵?
+
+## 행정구 단위
+gu_dens_sum['행정구 인구밀도_norm'] = scaler.fit_transform(gu_dens_sum[['인구밀도']])
+
+
+## 읍면동 단위: 각 구별로 다시 MinMaxScaler
+
+# 구별 리스트
+gu_list = dens_sort['행정구'].unique()
+
+# 구별 DataFrame 저장 딕셔너리
+gu_dfs = {}
+
+for gu in gu_list:
+    gu_df = dens_sort[dens_sort['행정구'] == gu].copy()
+    
+    # 인구밀도 계산 (NaN 방지)
+    gu_df['인구밀도'] = (gu_df['인구(명)'] / gu_df['면적(㎢)']).round(2)
+    gu_df['인구밀도'] = gu_df['인구밀도'].fillna(0)
+    
+    # 정규화 (2D array 형태로 변환)
+    gu_df[f'{gu} 인구밀도_norm'] = scaler.fit_transform(gu_df[['인구밀도']])
+    
+    gu_dfs[gu] = gu_df
+
+# Jung_gu =
+gu_dfs['중구'].sort_values(['인구밀도'], ascending=False)
+# Dong_gu =
+gu_dfs['동구'].sort_values(['인구밀도'], ascending=False)
+# Seo_gu =
+gu_dfs['서구'].sort_values(['인구밀도'], ascending=False)
+# Nam_gu =
+gu_dfs['남구'].sort_values(['인구밀도'], ascending=False)
+# Buk_gu =
+gu_dfs['북구'].sort_values(['인구밀도'], ascending=False)
+# Suseong_gu =
+gu_dfs['수성구'].sort_values(['인구밀도'], ascending=False)
+# Dalseo_gu =
+gu_dfs['달서구'].sort_values(['인구밀도'], ascending=False)
+# Dalseong_gun =
+gu_dfs['달성군'].sort_values(['인구밀도'], ascending=False)
+# Gunwi_gun =
+gu_dfs['군위군'].sort_values(['인구밀도'], ascending=False)
+
+
+# () mapping
+
+
+
+
+
+
+# (2) 4_2_age ############################################################
+# 동·읍·면_연령별_주민등록인구_내국인_전체연령_20250812133656
+# https://kosis.daegu.go.kr/statHtml/statHtml.do?orgId=203&tblId=DT_203N100020&lang_mode=ko&vw_cd=MT_OTITLE&list_id=203_B203_05&conn_path=I4
+
+age = pd.read_csv('./data/4_2_age.csv')
+
+age.rename(columns={'행정구역':'행정구',
+                    '동읍면': '읍면동'}, 
+                    inplace=True)
+
+# age.info()
+# age.head()
+
+
+# 쉼표와 '-' 처리 후 숫자형으로 변환
+for col in ['계', '남자', '여자']:
+    age[col] = (
+        age[col]
+        .astype(str)               # 문자열 변환
+        .str.replace(',', '', regex=False)  # 쉼표 제거
+        .str.strip()               # 앞뒤 공백 제거
+        .replace({'': '0', '-': '0'})       # 빈값과 '-'를 0으로
+        .astype(int)               # 정수형 변환
+    )
+
+# 변환 확인
+print(age.info())
+print(age.head())
+
+
+
+
+# 연령 필터링
+# age['연령'].unique()
+
+# 어린이: 0~14세
+child = ['0~4세', '5~9세', '10~14세']
+age_child = age[age['연령'].isin(child)]
+
+# 노인: 65세 이상
+senior = ['65~69세', '70~74세', '75~79세','80~84세', '85~89세', '90~94세','95~99세', '100세이상']
+age_senior = age[age['연령'].isin(senior)]
+
+
+# 어린이 인구 합계
+child_sum = (
+    age_child
+    .groupby(['행정구', '읍면동'], as_index=False)['계']
+    .sum()
+    .rename(columns={'계': '어린이수'})
+)
+# child_sum.info()
+
+# 노인 인구 합계
+senior_sum = (
+    age_senior
+    .groupby(['행정구', '읍면동'], as_index=False)['계']
+    .sum()
+    .rename(columns={'계': '고령자수'})
+)
+# senior_sum.info()
+
+
+
+# (1) 구 전체 : ['읍면동'] == '소계'
+child_gu = child_sum[child_sum['읍면동'] == '소계'][['행정구','어린이수']]
+senior_gu = senior_sum[senior_sum['읍면동'] == '소계'][['행정구','고령자수']]
+
+# dens 데이터와 병합 -> 면적 정보
+gu_dens_sum_4_age = gu_dens_sum[['행정구','인구(명)','면적(㎢)','인구밀도']]
+
+age_gu = pd.concat([gu_dens_sum_4_age.set_index(['행정구']),
+                    child_gu.set_index(['행정구']),
+                    senior_gu.set_index(['행정구'])],
+                    axis=1).reset_index()
+
+
+# 연령별 인구밀도 계산
+age_gu['어린이_인구밀도'] = (age_gu['어린이수'] / age_gu['면적(㎢)']).round(2)
+age_gu['어린이 인구밀도_norm'] = scaler.fit_transform(age_gu[['어린이_인구밀도']])
+age_gu['고령자_인구밀도'] = (age_gu['고령자수'] / age_gu['면적(㎢)']).round(2)
+age_gu['고령자 인구밀도_norm'] = scaler.fit_transform(age_gu[['고령자_인구밀도']])
+# age_gu
+# len(age_gu['행정구'].unique())
+
+
+
+# (2) 구 내 동읍면 : ['읍면동'] != '소계'
+child_dong = child_sum[child_sum['읍면동'] != '소계']
+senior_dong = senior_sum[senior_sum['읍면동'] != '소계']
+
+
+# dens 데이터와 병합 -> 면적 정보
+dong_dens_df = pd.concat(gu_dfs.values(), ignore_index=True)
+dong_dens_4_age = dong_dens_df[['행정구','읍면동','인구(명)','면적(㎢)','인구밀도']]
+# dong_dens_4_age['읍면동'].unique()
+
+age_dong = pd.concat([dong_dens_4_age.set_index(['행정구','읍면동']),
+                    child_dong.set_index(['행정구','읍면동']),
+                    senior_dong.set_index(['행정구','읍면동'])],
+                    axis=1).reset_index()
+
+
+# 연령별 인구밀도 계산
+age_dong['어린이_인구밀도'] = (age_dong['어린이수'] / age_dong['면적(㎢)']).round(2)
+age_dong['어린이 인구밀도_norm'] = scaler.fit_transform(age_dong[['어린이_인구밀도']])
+age_dong['고령자_인구밀도'] = (age_dong['고령자수'] / age_dong['면적(㎢)']).round(2)
+age_dong['고령자 인구밀도_norm'] = scaler.fit_transform(age_dong[['고령자_인구밀도']])
+
+
+# age_dong
+# len(age_dong['행정구'].unique())
+# len(age_dong['읍면동'].unique())
+
+# Jung_gu = 
+age_dong[age_dong['행정구'] == '중구']
+# Dong_gu = 
+age_dong[age_dong['행정구'] == '동구']
+# Seo_gu = 
+age_dong[age_dong['행정구'] == '서구']
+# Nam_gu = 
+age_dong[age_dong['행정구'] == '남구']
+# Buk_gu = 
+age_dong[age_dong['행정구'] == '북구']
+# Suseong_gu = 
+age_dong[age_dong['행정구'] == '수성구']
+# Dalseo_gu = 
+age_dong[age_dong['행정구'] == '달서구']
+# Dalseong_gun = 
+age_dong[age_dong['행정구'] == '달성군']
+# Gunwi_gun = 
+age_dong[age_dong['행정구'] == '군위군']
+
+
+
+# (3) sort
+
+## 구
+# age_gu.columns
+age_gu_child = age_gu[['행정구', '인구(명)', '면적(㎢)', '인구밀도', 
+                       '어린이수', '어린이_인구밀도', '어린이 인구밀도_norm']]
+age_gu_senior = age_gu[['행정구', '인구(명)', '면적(㎢)', '인구밀도', 
+                        '고령자수', '고령자_인구밀도', '고령자 인구밀도_norm']]
+
+# 행정구 어린이수 내림차순
+age_gu_child.sort_values(['어린이수'], ascending=False)
+# 행정구 어린이 인구밀도 내림차순
+age_gu_child.sort_values(['어린이_인구밀도'], ascending=False)
+
+
+# 행정구 고령자수 내림차순
+age_gu_senior.sort_values(['고령자수'], ascending=False)
+# 행정구 고령자 인구밀도 내림차순
+age_gu_senior.sort_values(['고령자_인구밀도'], ascending=False)
+
+
+
+## 동
+age_dong_child = age_dong[['행정구', '읍면동', '인구(명)', '면적(㎢)', '인구밀도', 
+                           '어린이수', '어린이_인구밀도', '어린이 인구밀도_norm']]
+age_dong_senior = age_dong[['행정구', '읍면동', '인구(명)', '면적(㎢)', '인구밀도',
+                            '고령자수', '고령자_인구밀도', '고령자 인구밀도_norm']]
+
+## 대구시 전체 동 내 sort 10
+
+age_dong_child.sort_values(['어린이수'], ascending=False).head(10)
+age_dong_child.sort_values(['어린이_인구밀도'], ascending=False).head(10)
+age_dong_senior.sort_values(['고령자수'], ascending=False).head(10)
+age_dong_senior.sort_values(['고령자_인구밀도'], ascending=False).head(10)
+
+
+## 각 행정구 내 sort
+# age_dong.info()
+# len(age_dong['행정구'].unique())
+
+# 중구: Jung_gu = 
+age_dong_child[age_dong_child['행정구'] == '중구'].sort_values(['어린이수'], ascending=False)
+age_dong_senior[age_dong_senior['행정구'] == '중구'].sort_values(['고령자수'], ascending=False)
+
+# 동구: Dong_gu = 
+age_dong_child[age_dong_child['행정구'] == '동구'].sort_values(['어린이수'], ascending=False)
+age_dong_senior[age_dong_senior['행정구'] == '동구'].sort_values(['고령자수'], ascending=False)
+
+# 서구: Seo_gu = 
+age_dong_child[age_dong_child['행정구'] == '서구'].sort_values(['어린이수'], ascending=False)
+age_dong_senior[age_dong_senior['행정구'] == '서구'].sort_values(['고령자수'], ascending=False)
+
+# 남구: Nam_gu = 
+age_dong_child[age_dong_child['행정구'] == '남구'].sort_values(['어린이수'], ascending=False)
+age_dong_senior[age_dong_senior['행정구'] == '남구'].sort_values(['고령자수'], ascending=False)
+
+# 북구: Buk_gu = 
+age_dong_child[age_dong_child['행정구'] == '북구'].sort_values(['어린이수'], ascending=False)
+age_dong_senior[age_dong_senior['행정구'] == '북구'].sort_values(['고령자수'], ascending=False)
+
+# 수성구: Suseong_gu = 
+age_dong_child[age_dong_child['행정구'] == '수성구'].sort_values(['어린이수'], ascending=False)
+age_dong_senior[age_dong_senior['행정구'] == '수성구'].sort_values(['고령자수'], ascending=False)
+
+# 달서구: Dalseo_gu = 
+age_dong_child[age_dong_child['행정구'] == '달서구'].sort_values(['어린이수'], ascending=False)
+age_dong_senior[age_dong_senior['행정구'] == '달서구'].sort_values(['고령자수'], ascending=False)
+
+# 달성군: Dalseong_gun = 
+age_dong_child[age_dong_child['행정구'] == '달성군'].sort_values(['어린이수'], ascending=False)
+age_dong_senior[age_dong_senior['행정구'] == '달성군'].sort_values(['고령자수'], ascending=False)
+
+# 군위군: Gunwi_gun = 
+age_dong_child[age_dong_child['행정구'] == '군위군'].sort_values(['어린이수'], ascending=False)
+age_dong_senior[age_dong_senior['행정구'] == '군위군'].sort_values(['고령자수'], ascending=False)
+
+
+
+# (4) norm 활용 -> 지도 히트맵?
+
+
+# () mapping
+
+
+
+
+
+# (3) 4_3_foreign ############################################################
+# 동·읍·면별_내·외국인_20250812141415
+# https://kosis.daegu.go.kr/statHtml/statHtml.do?orgId=203&tblId=DT_203N100015&lang_mode=ko&vw_cd=MT_OTITLE&list_id=203_B203_05&conn_path=I4
+
+fore = pd.read_csv('./data/4_3_foreign.csv')
+fore.info()
+fore.head()
+
+
+fore.rename(columns={'행정구역':'행정구',
+                    '동읍면': '읍면동'}, 
+                    inplace=True)
+
+# fore.info()
+# fore.head()
+
+# 쉼표와 '-' 처리 후 숫자형으로 변환
+for col in ['총인구', '한국인', '외국인']:
+    fore[col] = (
+        fore[col]
+        .astype(str)               # 문자열 변환
+        .str.replace(',', '', regex=False)  # 쉼표 제거
+        .str.strip()               # 앞뒤 공백 제거
+        .replace({'': '0', '-': '0'})       # 빈값과 '-'를 0으로
+        .astype(int)               # 정수형 변환
+    )
+
+# 변환 확인
+# fore.info()
+# fore.head()
+
+
+<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+fore
+
+# 행정구
+
+# 읍면동
+
+
+
+
+
+
+############################################################
+
+
+############################################################
+
+
+
+# 1) 'age', 'fore' 숫자형 변환
+age['계'] = pd.to_numeric(age['계'], errors='coerce')
+age['연령'] = age['연령'].astype(str)  # 연령 정보 문자 확인용
+
+fore['총인구'] = pd.to_numeric(fore['총인구'], errors='coerce')
+fore['외국인'] = pd.to_numeric(fore['외국인'], errors='coerce')
+
+# 2) 고령자(65세 이상) 인구 추출 및 읍면동별 합산
+age_65 = age[age['연령'].str.contains('65|70|75|80|85|90|95|100')]
+age_65_sum = age_65.groupby(['행정구역', '동읍면'])['계'].sum().reset_index().rename(columns={'계':'고령자수'})
+
+# 3) 외국인 비율 계산 (읍면동별)
+fore_sum = fore.groupby(['행정구역', '동읍면']).sum(numeric_only=True).reset_index()
+fore_sum['외국인비율'] = fore_sum['외국인'] / fore_sum['총인구']
+
+# 4) dens와 고령자, 외국인 비율 데이터 병합
+df_merge = dens.merge(age_65_sum, left_on=['행정구', '읍면동'], right_on=['행정구역', '동읍면'], how='left')
+df_merge = df_merge.merge(fore_sum[['행정구역', '동읍면', '외국인비율']], left_on=['행정구', '읍면동'], right_on=['행정구역', '동읍면'], how='left')
+
+# 5) 결측치 처리 및 우선 대응지역 필터링 (예시)
+df_merge['고령자수'] = df_merge['고령자수'].fillna(0)
+df_merge['외국인비율'] = df_merge['외국인비율'].fillna(0)
+
+# 예) 인구밀도 상위 20%, 고령자수 상위 30%, 외국인비율 10% 이상 조건 부여
+pop_density_thresh = df_merge['인구밀도(명/㎢)'].quantile(0.8)
+elderly_thresh = df_merge['고령자수'].quantile(0.7)
+foreign_thresh = 0.1
+
+priority_areas = df_merge[
+    (df_merge['인구밀도(명/㎢)'] >= pop_density_thresh) &
+    (df_merge['고령자수'] >= elderly_thresh) &
+    (df_merge['외국인비율'] >= foreign_thresh)
+]
+
+print("우선 침수 대응 필요 지역:")
+print(priority_areas[['행정구', '읍면동', '인구밀도(명/㎢)', '고령자수', '외국인비율']])
+
+
+
+from sklearn.preprocessing import MinMaxScaler
+
+
+# 결측치 처리
+df_merge['고령자수'] = df_merge['고령자수'].fillna(0)
+df_merge['외국인비율'] = df_merge['외국인비율'].fillna(0)
+
+# 사용할 컬럼 추출
+risk_df = df_merge[['행정구', '읍면동', '인구밀도(명/㎢)', '고령자수', '외국인비율']].copy()
+
+# inf 값 → NaN 변환
+risk_df[['인구밀도(명/㎢)', '고령자수', '외국인비율']] = risk_df[['인구밀도(명/㎢)', '고령자수', '외국인비율']].replace([np.inf, -np.inf], np.nan)
+
+# NaN 채우기 (예: 0으로 채움, 또는 평균/중앙값으로)
+risk_df = risk_df.fillna(0)
+
+
+# 정규화 (Min-Max scaling)
+from sklearn.preprocessing import MinMaxScaler
+scaler = MinMaxScaler()
+risk_df[['인구밀도_norm', '고령자수_norm', '외국인비율_norm']] = scaler.fit_transform(
+    risk_df[['인구밀도(명/㎢)', '고령자수', '외국인비율']])
+
+
+# 가중치 지정
+weights = {
+    '인구밀도_norm': 0.4,
+    '고령자수_norm': 0.4,
+    '외국인비율_norm': 0.2
+}
+
+# 위험도 점수 계산
+risk_df['위험도점수'] = (
+    risk_df['인구밀도_norm'] * weights['인구밀도_norm'] +
+    risk_df['고령자수_norm'] * weights['고령자수_norm'] +
+    risk_df['외국인비율_norm'] * weights['외국인비율_norm']
+)
+
+# 위험도 점수 상위 10개 지역 출력
+top_risk_areas = risk_df.sort_values(by='위험도점수', ascending=False).head(10)
+
+print(top_risk_areas[['행정구', '읍면동', '위험도점수']])
+
