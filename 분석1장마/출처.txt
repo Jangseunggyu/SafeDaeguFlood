@@ -1,0 +1,2 @@
+장마 - 지점별조회
+https://data.kma.go.kr/climate/rainySeason/selectRainySeasonStdList.do?pgmNo=120
