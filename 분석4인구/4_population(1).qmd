@@ -38,6 +38,9 @@ import json
 from sklearn.preprocessing import MinMaxScaler
 scaler = MinMaxScaler()
 
+# csv로 저장하기
+# .to_csv("파일이름.csv", index=False, encoding="utf-8-sig")
+
 ```
 
 4.  인구요인
@@ -79,9 +82,11 @@ gu_dens_sum['인구밀도'] = (gu_dens_sum['인구(명)'] / gu_dens_sum['면적(
 
 # 행정구 단위 인구밀도
 gu_dens_sum
+# gu_dens_sum.to_csv("행정구 전체 인구밀도.csv", index=False, encoding="utf-8-sig")
 
 # 읍면동 단위 인구밀도
 dens
+# dens.to_csv("읍면동 전체 인구밀도.csv", index=False, encoding="utf-8-sig")
 
 ```
 
@@ -275,6 +280,7 @@ age_gu['고령자 인구밀도_norm'] = scaler.fit_transform(age_gu[['고령자_
 ## 출력
 
 age_gu
+# age_gu.to_csv("어린이 고령자 행정구 인구밀도.csv", index=False, encoding="utf-8-sig")
 
 ```
 
@@ -307,6 +313,7 @@ age_dong['고령자 인구밀도_norm'] = scaler.fit_transform(age_dong[['고령
 
 
 ## 출력
+# age_dong.to_csv("어린이 고령자 읍면동 인구밀도.csv", index=False, encoding="utf-8-sig")
 
 # Jung_gu = 
 age_dong[age_dong['행정구'] == '중구']
@@ -430,13 +437,130 @@ age_dong_senior[age_dong_senior['행정구'] == '군위군'].sort_values(['고�
 # 동·읍·면별_내·외국인_20250812141415
 # https://kosis.daegu.go.kr/statHtml/statHtml.do?orgId=203&tblId=DT_203N100015&lang_mode=ko&vw_cd=MT_OTITLE&list_id=203_B203_05&conn_path=I4
 
+# 전처리
+
 fore = pd.read_csv('./data/4_3_foreign.csv')
+
+for col in ['총인구', '한국인', '외국인']:
+    fore[col] = (
+        fore[col]
+        .astype(str)
+        .str.replace(',', '')
+        .str.strip()
+        .replace('-', '0')
+        .astype(int)
+    )
+
+fore.rename(columns={'행정구역':'행정구',
+                    '동읍면': '읍면동',
+                    '총인구': '총 인구(명)',
+                    '한국인': '한국인 인구(명)', 
+                    '외국인': '외국인 인구(명)'}, 
+                    inplace=True)
+
+fore = fore[(fore['행정구'] != '합계') & (fore['성별'] == '계')]
+
 fore.info()
 fore.head()
 
 
+# 행정구별 외국인 인구
+fore_gu = fore[fore['읍면동'] == '소계'][['행정구', '총 인구(명)', '외국인 인구(명)']]
+
+# 읍면동별 외국인 인구
+fore_dong = fore[fore['읍면동'] != '소계'][['행정구', '읍면동', '총 인구(명)', '외국인 인구(명)']]
 
 
+```
+
+```{python}
+
+# 외국인 인구 밀도
+
+# (1) 행정구별 외국인 인구 밀도
+gu_area = dens.groupby('행정구')[['면적(㎢)']].sum().reset_index()
+
+fore_gu = pd.merge(
+    fore_gu,
+    gu_area,
+    on='행정구',
+    how='left'
+)
+
+fore_gu['외국인 인구밀도'] = (fore_gu['외국인 인구(명)'] / fore_gu['면적(㎢)']).round(2)
+# fore_gu
+
+# (2) 읍면동별 외국인 인구 밀도
+dong_area = dens.groupby('읍면동')[['면적(㎢)']].sum().reset_index()
+
+fore_dong = pd.merge(
+    fore_dong,
+    dong_area,
+    on='읍면동',
+    how='left'
+)
+
+fore_dong['외국인 인구밀도'] = (fore_dong['외국인 인구(명)'] / fore_dong['면적(㎢)']).round(2)
+# fore_dong
+
+
+## 출력
+
+# (1) 행정구별 외국인 인구 밀도
+# fore_gu
+
+fore_gu.sort_values(by='외국인 인구밀도', ascending=False)
+
+
+# (2) 읍면동별 외국인 인구 밀도
+# fore_dong
+
+# 읍면동별 외국인 인구 밀도 top 10
+fore_gu.sort_values(by='외국인 인구밀도', ascending=False).head(10)
+
+
+```
+
+```{python}
+
+# 외국인 인구밀도 정규화
+
+# (1) 행정구별 외국인 인구 밀도
+fore_gu['외국인 인구밀도_norm'] = scaler.fit_transform(
+    fore_gu[['외국인 인구밀도']])
+
+
+
+# (2) 읍면동별 외국인 인구 밀도
+fore_dong['외국인 인구밀도_norm'] = scaler.fit_transform(
+    fore_dong[['외국인 인구밀도']])
+
+# 행정구별로 데이터프레임 분리
+# Jung_gu      = 
+fore_dong[fore_dong['행정구'] == '중구']
+# Dong_gu      = 
+fore_dong[fore_dong['행정구'] == '동구']
+# Seo_gu       = 
+fore_dong[fore_dong['행정구'] == '서구']
+# Nam_gu       = 
+fore_dong[fore_dong['행정구'] == '남구']
+# Buk_gu       = 
+fore_dong[fore_dong['행정구'] == '북구']
+# Suseong_gu   = 
+fore_dong[fore_dong['행정구'] == '수성구']
+# Dalseo_gu    = 
+fore_dong[fore_dong['행정구'] == '달서구']
+# Dalseong_gun = 
+fore_dong[fore_dong['행정구'] == '달성군']
+# Gunwi_gun    = 
+fore_dong[fore_dong['행정구'] == '군위군']
+
+
+
+# 출력
+
+# fore_gu.to_csv("행정구 외국인 인구.csv", index=False, encoding="utf-8-sig")
+# fore_dong.to_csv("읍면동 외국인 인구.csv", index=False, encoding="utf-8-sig")
 
 
 ```
@@ -445,13 +569,15 @@ fore.head()
 
 ```
 
-```{python}
 
-```
 
-```{python}
 
-```
+
+
+
+
+
+
 
 () 고령자 + 외국인
 
