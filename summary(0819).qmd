@@ -33,6 +33,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import geopandas as gpd
 import json 
+import folium
 
 from sklearn.preprocessing import MinMaxScaler
 scaler = MinMaxScaler()
@@ -63,7 +64,7 @@ from pathlib import Path
 
 # 1. 날씨 요인
 
-## 대구시 장마 기간 및 기간 내 총 강수량 분석
+## 대구시 장마 기간 및 기간 내 총 강수량 분석 (2011\~2024)
 
 ```{python}
 # 대구시 전체 장마 기간 및 기간 내 총 강수량
@@ -73,7 +74,7 @@ rain
 
 ```
 
-## 대구시 행정구별  강수량 (2016.01.01\~2025.08.18)
+## 대구시 행정구별 강수량 (2016.01.01\~2025.08.18)
 
 ```{python}
 
@@ -106,7 +107,7 @@ stations = [
     (992, "하빈",   35.900780, 128.446059, "하빈면 현내리(면민운동장 좌표)"),
 ]
 df_stn = pd.DataFrame(stations, columns=["지점","지점명","lat","lon","좌표출처"])
-df_stn.to_csv("stations_daegu.csv", index=False, encoding="utf-8-sig")
+# df_stn.to_csv("stations_daegu.csv", index=False, encoding="utf-8-sig")
 
 # =========================================================
 # 2) 대구 9개 구·군 중심 좌표 CSV 직접 생성 (공개 JSON의 대표점 사용)
@@ -123,7 +124,7 @@ districts = [
     ("군위군", 36.16995, 128.64705),  # 2023-07-01 대구 편입
 ]
 df_ctr = pd.DataFrame(districts, columns=["구군","lat","lon"])
-df_ctr.to_csv("daegu_district_centroids.csv", index=False, encoding="utf-8-sig")
+# df_ctr.to_csv("daegu_district_centroids.csv", index=False, encoding="utf-8-sig")
 
 # =========================================================
 # 3) 강수 데이터 읽기
@@ -217,21 +218,35 @@ print(" - 결과:        daegu_district_rain_idw.csv")
 # 출력
 
 rain_gu_mean = df_out.groupby("구군")['추정_일강수량(mm)'].mean()
-rain_gu_mean
+# rain_gu_mean
 # rain_gu_mean.to_csv("대구 행정구별 강수량 mean.csv", index=False, encoding="utf-8-sig")
 rain_gu_describe = df_out.groupby("구군")['추정_일강수량(mm)'].describe()
-rain_gu_describe
+# rain_gu_describe
 # rain_gu_describe.to_csv("대구 행정구별 강수량 describe.csv", index=False, encoding="utf-8-sig")
 
 ```
 
+## 행정구별 장마 내 강수량 분석 (2016\~2024)
+
 ```{python}
 # 장마기간 내 행정구별 연간 강수량 분석
+
+# 출력
+
+rainy_gu = pd.read_csv('./data/장마기간 행정구별 강수량.csv')
+# rainy_gu
+
+# rainy_dong = pd.read_csv('./data/장마기간 행정구별 강수량_행정동추가.csv')
+
 
 ```
 
 ```{python}
 # mapping
+
+# 시각화:
+# 지역별 평균 or 지역별 강수량 최댓값
+
 ```
 
 # 2. 인구 요인
@@ -369,8 +384,81 @@ gu_dfs['군위군'].sort_values(['인구밀도'], ascending=False)
 ```
 
 ```{python}
+# 지도 시각화
 
-# () mapping
+# --- 1. 데이터 로드 ---
+# CSV 파일의 정확한 9개 컬럼 이름 목록
+csv_columns = ['행정구', '읍면동', '인구(명)', '면적(㎢)', '세대수', '통', '리', '반', '인구밀도']
+
+# usecols 옵션으로 필요한 9개 컬럼만 읽어와서 ParserError를 해결합니다.
+pop_density_df = pd.read_csv('.\data\읍면동 전체 인구밀도.csv',
+    names=csv_columns,  # 컬럼 이름을 강제로 지정
+    header=0,           # 첫 번째 줄을 헤더로 사용 (이후 names로 덮어씀)
+    usecols=csv_columns # 지정된 컬럼만 사용
+)
+
+geo_daegu = gpd.read_file(".\data\hangjeongdong_대구광역시.geojson")
+geo_gyeongbuk = gpd.read_file(".\data\hangjeongdong_경상북도.geojson")
+
+
+# --- 2. 데이터 전처리 및 병합 ---
+# 2-1. 지도 데이터(GeoJSON) 준비
+geo_gunwi = geo_gyeongbuk[geo_gyeongbuk['adm_nm'].str.contains('경상북도 군위군', na=False)].copy()
+geo_merged = pd.concat([geo_daegu, geo_gunwi], ignore_index=True)
+geo_merged = gpd.GeoDataFrame(geo_merged, crs=geo_daegu.crs)
+geo_merged['adm_nm'] = geo_merged['adm_nm'].str.strip().str.replace('경상북도 군위군', '군위군', regex=False)
+geo_merged['읍면동_key'] = geo_merged['adm_nm'].apply(lambda x: x.split(' ')[-1])
+
+# 2-2. 양쪽 데이터의 행정동 이름에서 모든 특수문자와 '동'을 제거하여 형식을 통일합니다.
+# (예: '두류1·2동' -> '두류12', '두류1동2동' -> '두류12')
+def clean_dong_name(name_series):
+    return name_series.str.replace('.', '', regex=False).str.replace('·', '', regex=False).str.replace(',', '', regex=False).str.replace('동', '', regex=False)
+
+geo_merged['읍면동_key'] = clean_dong_name(geo_merged['읍면동_key'])
+pop_density_df['읍면동_key'] = clean_dong_name(pop_density_df['읍면동'])
+
+
+# 2-3. 형식이 통일된 '읍면동_key'를 기준으로 데이터 병합
+merged_gdf = geo_merged.merge(pop_density_df, on='읍면동_key')
+
+
+# --- 3. 지도 시각화 ---
+m = folium.Map(location=[35.8714, 128.6014], zoom_start=11)
+
+# [역할 1] 배경색 Choropleth 레이어
+folium.Choropleth(
+    geo_data=merged_gdf,
+    name='인구 밀도',
+    data=merged_gdf,
+    columns=['읍면동_key', '인구밀도'],
+    key_on='feature.properties.읍면동_key',
+    fill_color='YlOrRd',
+    fill_opacity=0.8,
+    line_opacity=0,
+    legend_name='인구 밀도 (명/㎢)'
+).add_to(m)
+
+# [역할 2] 툴팁, 테두리선, 하이라이트 GeoJson 레이어
+tooltip = folium.features.GeoJsonTooltip(
+    fields=['읍면동', '인구밀도'],  # 툴팁에는 원래 '읍면동' 이름 표시
+    aliases=['행정동:', '인구밀도:'],
+    style=("background-color: white; color: #333333; font-family: arial; font-size: 12px; padding: 10px;")
+)
+highlight_function = lambda x: {'weight': 3, 'color': 'black', 'fillOpacity': 0.5}
+
+folium.GeoJson(
+    merged_gdf,
+    style_function=lambda x: {'fillColor': 'transparent', 'color': 'black', 'weight': 0.5},
+    highlight_function=highlight_function,
+    tooltip=tooltip
+).add_to(m)
+
+folium.LayerControl().add_to(m)
+
+
+# --- 4. 파일로 저장 ---
+# m.save('대구 전체 인구밀도_map.html')
+# print("🎉 모든 문제가 해결된 최종 지도가 '대구 전체 인구밀도_map.html' 파일로 저장되었습니다.")
 
 ```
 
@@ -613,7 +701,152 @@ age_dong_senior[age_dong_senior['행정구'] == '군위군'].sort_values(['고�
 ```
 
 ```{python}
-# () mapping
+# 지도 시각화
+
+# 어린이 인구밀도
+
+
+# --- 1. 데이터 로드 ---
+# '어린이 밀도.csv' 파일을 읽어옵니다. encoding='cp949'를 추가하여 한글 깨짐을 방지합니다.
+pop_density_df = pd.read_csv('.\data\어린이 고령자 읍면동 인구밀도.csv') # <--- 1. 파일 이름 수정
+
+
+geo_daegu = gpd.read_file(".\data\hangjeongdong_대구광역시.geojson")
+geo_gyeongbuk = gpd.read_file(".\data\hangjeongdong_경상북도.geojson")
+
+
+# --- 2. 데이터 전처리 및 병합 ---
+# 2-1. 지도 데이터(GeoJSON) 준비 (기존과 동일)
+geo_gunwi = geo_gyeongbuk[geo_gyeongbuk['adm_nm'].str.contains('경상북도 군위군', na=False)].copy()
+geo_merged = pd.concat([geo_daegu, geo_gunwi], ignore_index=True)
+geo_merged = gpd.GeoDataFrame(geo_merged, crs=geo_daegu.crs)
+geo_merged['adm_nm'] = geo_merged['adm_nm'].str.strip().str.replace('경상북도 군위군', '군위군', regex=False)
+geo_merged['읍면동_key'] = geo_merged['adm_nm'].apply(lambda x: x.split(' ')[-1])
+
+# 2-2. 양쪽 데이터의 행정동 이름에서 모든 특수문자와 '동'을 제거하여 형식을 통일 (기존과 동일)
+def clean_dong_name(name_series):
+    return name_series.str.replace('.', '', regex=False).str.replace('·', '', regex=False).str.replace(',', '', regex=False).str.replace('동', '', regex=False)
+
+geo_merged['읍면동_key'] = clean_dong_name(geo_merged['읍면동_key'])
+pop_density_df['읍면동_key'] = clean_dong_name(pop_density_df['읍면동'])
+
+
+# 2-3. 형식이 통일된 '읍면동_key'를 기준으로 데이터 병합
+merged_gdf = geo_merged.merge(pop_density_df, on='읍면동_key')
+
+
+# --- 3. 지도 시각화 ---
+m = folium.Map(location=[35.8714, 128.6014], zoom_start=11)
+
+# [역할 1] 배경색 Choropleth 레이어
+folium.Choropleth(
+    geo_data=merged_gdf,
+    name='어린이 인구 밀도', # <--- 2. 이름 수정
+    data=merged_gdf,
+    columns=['읍면동_key', '어린이_인구밀도'], # <--- 3. 컬럼 수정
+    key_on='feature.properties.읍면동_key',
+    fill_color='YlOrRd',
+    fill_opacity=0.8,
+    line_opacity=0,
+    legend_name='어린이 인구 밀도 (명/㎢)' # <--- 4. 범례 이름 수정
+).add_to(m)
+
+# [역할 2] 툴팁, 테두리선, 하이라이트 GeoJson 레이어
+tooltip = folium.features.GeoJsonTooltip(
+    fields=['읍면동', '어린이_인구밀도'],  # <--- 5. 툴팁 컬럼 수정
+    aliases=['행정동:', '어린이 인구밀도:'], # <--- 6. 툴팁 별명 수정
+    style=("background-color: white; color: #333333; font-family: arial; font-size: 12px; padding: 10px;")
+)
+highlight_function = lambda x: {'weight': 3, 'color': 'black', 'fillOpacity': 0.5}
+
+folium.GeoJson(
+    merged_gdf,
+    style_function=lambda x: {'fillColor': 'transparent', 'color': 'black', 'weight': 0.5},
+    highlight_function=highlight_function,
+    tooltip=tooltip
+).add_to(m)
+
+folium.LayerControl().add_to(m)
+
+
+# --- 4. 파일로 저장 ---
+# m.save('대구 어린이 인구밀도_map.html') # <--- 7. 저장 파일 이름 수정
+# print("🎉 어린이 인구 밀도 지도가 대구 어린이 인구밀도_map.html' 파일로 저장되었습니다.")
+
+```
+
+```{python}
+# 지도 시각화
+
+# 고령자 인구밀도
+
+
+# --- 1. 데이터 로드 ---
+# '고령자 인구밀도.csv' 파일을 읽어옵니다. encoding='cp949'를 추가하여 한글 깨짐을 방지합니다.
+pop_density_df = pd.read_csv('.\data\어린이 고령자 읍면동 인구밀도.csv')
+
+geo_daegu = gpd.read_file(".\data\hangjeongdong_대구광역시.geojson")
+geo_gyeongbuk = gpd.read_file(".\data\hangjeongdong_경상북도.geojson")
+
+
+# --- 2. 데이터 전처리 및 병합 ---
+# 2-1. 지도 데이터(GeoJSON) 준비 (기존과 동일)
+geo_gunwi = geo_gyeongbuk[geo_gyeongbuk['adm_nm'].str.contains('경상북도 군위군', na=False)].copy()
+geo_merged = pd.concat([geo_daegu, geo_gunwi], ignore_index=True)
+geo_merged = gpd.GeoDataFrame(geo_merged, crs=geo_daegu.crs)
+geo_merged['adm_nm'] = geo_merged['adm_nm'].str.strip().str.replace('경상북도 군위군', '군위군', regex=False)
+geo_merged['읍면동_key'] = geo_merged['adm_nm'].apply(lambda x: x.split(' ')[-1])
+
+# 2-2. 양쪽 데이터의 행정동 이름에서 모든 특수문자와 '동'을 제거하여 형식을 통일 (기존과 동일)
+def clean_dong_name(name_series):
+    return name_series.str.replace('.', '', regex=False).str.replace('·', '', regex=False).str.replace(',', '', regex=False).str.replace('동', '', regex=False)
+
+geo_merged['읍면동_key'] = clean_dong_name(geo_merged['읍면동_key'])
+pop_density_df['읍면동_key'] = clean_dong_name(pop_density_df['읍면동'])
+
+
+# 2-3. 형식이 통일된 '읍면동_key'를 기준으로 데이터 병합
+merged_gdf = geo_merged.merge(pop_density_df, on='읍면동_key')
+
+
+# --- 3. 지도 시각화 ---
+m = folium.Map(location=[35.8714, 128.6014], zoom_start=11)
+
+# [역할 1] 배경색 Choropleth 레이어
+folium.Choropleth(
+    geo_data=merged_gdf,
+    name='고령자 인구 밀도', # <--- 2. 이름 수정
+    data=merged_gdf,
+    columns=['읍면동_key', '고령자_인구밀도'], # <--- 3. 컬럼 수정
+    key_on='feature.properties.읍면동_key',
+    fill_color='YlOrRd',
+    fill_opacity=0.8,
+    line_opacity=0,
+    legend_name='고령자 인구 밀도 (명/㎢)' # <--- 4. 범례 이름 수정
+).add_to(m)
+
+# [역할 2] 툴팁, 테두리선, 하이라이트 GeoJson 레이어
+tooltip = folium.features.GeoJsonTooltip(
+    fields=['읍면동', '고령자_인구밀도'],  # <--- 5. 툴팁 컬럼 수정
+    aliases=['행정동:', '고령자 인구밀도:'], # <--- 6. 툴팁 별명 수정
+    style=("background-color: white; color: #333333; font-family: arial; font-size: 12px; padding: 10px;")
+)
+highlight_function = lambda x: {'weight': 3, 'color': 'black', 'fillOpacity': 0.5}
+
+folium.GeoJson(
+    merged_gdf,
+    style_function=lambda x: {'fillColor': 'transparent', 'color': 'black', 'weight': 0.5},
+    highlight_function=highlight_function,
+    tooltip=tooltip
+).add_to(m)
+
+folium.LayerControl().add_to(m)
+
+
+# --- 4. 파일로 저장 ---
+# m.save('대구 고령자 인구밀도_map.html') # <--- 7. 저장 파일 이름 수정
+# print("🎉 고령자 인구 밀도 지도가 '대구 고령자 인구밀도_map.html' 파일로 저장되었습니다.")
+
 ```
 
 ## (3) 외국인 인구 밀도
@@ -752,7 +985,74 @@ fore_dong[fore_dong['행정구'] == '군위군']
 ```
 
 ```{python}
-# () mapping
+# 지도 시각화
+
+# --- 1. 데이터 로드 ---
+# '읍면동 외국인 인구.csv' 파일을 읽어옵니다. encoding='cp949'를 추가하여 한글 깨짐을 방지합니다.
+pop_density_df = pd.read_csv('.\data\읍면동 외국인 인구.csv')
+
+geo_daegu = gpd.read_file(".\data\hangjeongdong_대구광역시.geojson")
+geo_gyeongbuk = gpd.read_file(".\data\hangjeongdong_경상북도.geojson")
+
+
+# --- 2. 데이터 전처리 및 병합 ---
+# 2-1. 지도 데이터(GeoJSON) 준비 (기존과 동일)
+geo_gunwi = geo_gyeongbuk[geo_gyeongbuk['adm_nm'].str.contains('경상북도 군위군', na=False)].copy()
+geo_merged = pd.concat([geo_daegu, geo_gunwi], ignore_index=True)
+geo_merged = gpd.GeoDataFrame(geo_merged, crs=geo_daegu.crs)
+geo_merged['adm_nm'] = geo_merged['adm_nm'].str.strip().str.replace('경상북도 군위군', '군위군', regex=False)
+geo_merged['읍면동_key'] = geo_merged['adm_nm'].apply(lambda x: x.split(' ')[-1])
+
+# 2-2. 양쪽 데이터의 행정동 이름에서 모든 특수문자와 '동'을 제거하여 형식을 통일 (기존과 동일)
+def clean_dong_name(name_series):
+    return name_series.str.replace('.', '', regex=False).str.replace('·', '', regex=False).str.replace(',', '', regex=False).str.replace('동', '', regex=False)
+
+geo_merged['읍면동_key'] = clean_dong_name(geo_merged['읍면동_key'])
+pop_density_df['읍면동_key'] = clean_dong_name(pop_density_df['읍면동'])
+
+
+# 2-3. 형식이 통일된 '읍면동_key'를 기준으로 데이터 병합
+merged_gdf = geo_merged.merge(pop_density_df, on='읍면동_key')
+
+
+# --- 3. 지도 시각화 ---
+m = folium.Map(location=[35.8714, 128.6014], zoom_start=11)
+
+# [역할 1] 배경색 Choropleth 레이어
+folium.Choropleth(
+    geo_data=merged_gdf,
+    name='외국인 인구 밀도',
+    data=merged_gdf,
+    columns=['읍면동_key', '외국인 인구밀도'],
+    key_on='feature.properties.읍면동_key',
+    fill_color='YlOrRd',  # <--- 색상 스케일 원복
+    fill_opacity=0.8,
+    line_opacity=0,
+    legend_name='외국인 인구 밀도 (명/㎢)'
+).add_to(m)
+
+# [역할 2] 툴팁, 테두리선, 하이라이트 GeoJson 레이어
+tooltip = folium.features.GeoJsonTooltip(
+    fields=['읍면동', '외국인 인구밀도'],
+    aliases=['행정동:', '외국인 인구밀도:'],
+    style=("background-color: white; color: #333333; font-family: arial; font-size: 12px; padding: 10px;")
+)
+highlight_function = lambda x: {'weight': 3, 'color': 'black', 'fillOpacity': 0.5}
+
+folium.GeoJson(
+    merged_gdf,
+    style_function=lambda x: {'fillColor': 'transparent', 'color': 'black', 'weight': 0.5},
+    highlight_function=highlight_function,
+    tooltip=tooltip
+).add_to(m)
+
+folium.LayerControl().add_to(m)
+
+
+# --- 4. 파일로 저장 ---
+# m.save('대구 외국인 인구밀도_map.html')
+# print("🎉 외국인 인구 밀도 지도가 '대구 외국인 인구밀도_map.html' 파일로 저장되었습니다.")
+
 ```
 
 ## () 우선대응 필요: 인구밀도 상위 20% + 고령자수 상위 30%
@@ -868,15 +1168,12 @@ print(top_risk_areas[['행정구', '읍면동', '위험도점수']])
 ```{python}
 # 지도 전처리
 
-import geopandas as gpd
-import pandas as pd
-import folium
 
 #########################################################################
 # 1. 행정동 GeoJSON 불러오기
 # -----------------------------------------------------------------------
-geo = gpd.read_file(".\hangjeongdong_대구광역시.geojson")
-geo2 = gpd.read_file(".\hangjeongdong_경상북도.geojson")
+geo = gpd.read_file("./data/hangjeongdong_대구광역시.geojson")
+geo2 = gpd.read_file("./data/hangjeongdong_경상북도.geojson")
 
 # 군위 데이터 추출
 geo1 = geo2[geo2['adm_nm'].str.contains('경상북도 군위', na=False)].copy()
@@ -911,57 +1208,196 @@ pop.loc[~is_gunwi, 'adm_nm'] = '대구광역시 ' + pop.loc[~is_gunwi, 'adm_nm']
 
 ```
 
-## (1) 배수펌프장 위치
+## (1) 빗물펌프장 위치
 
 ```{python}
 
-# 배수펌프장 데이터
+# 빗물펌프장 데이터
 
-#########################################################################
-# 3. 재해위험지구 / 배수펌프장 데이터
-# -----------------------------------------------------------------------
-hazard = pd.read_csv("재해위험지역/대구광역시_재해위험지구_통합.csv", encoding="cp949")
-pump = pd.read_csv("배수펌프장/대구광역시 달성군_배수펌프장_20240829.csv", encoding="cp949")
-pump1 = pd.read_csv("배수펌프장/대구광역시 중구 배수펌프장정보_20201013.csv", encoding="cp949")
-pump2 = pd.read_csv("배수펌프장/대구광역시_서구_배수펌프장 현황_20250716.csv", encoding="cp949")
+# --- 1. 데이터 로드 ---
+# 행정동 GeoJSON
+geo_daegu = gpd.read_file(".\data\hangjeongdong_대구광역시.geojson")
+geo_gyeongbuk = gpd.read_file(".\data\hangjeongdong_경상북도.geojson")
 
-# 펌프장 데이터 전처리 함수
-def preprocess_pump(df, addr_col, name_col):
-    df = df.dropna(subset=[addr_col, name_col, "위도", "경도"])
-    df_renamed = df.rename(columns={name_col: "펌프장명", addr_col: "주소"})
-    return df_renamed[["주소", "펌프장명", "위도", "경도"]]
+# 빗물펌프장 정보 CSV (쉼표로 구분된 파일)
+pump_df = pd.read_csv('.\data\빗물펌프장final.csv', sep=',')
 
-pump = preprocess_pump(pump, "소재지지번주소", "배수펌프장명")
-pump1 = preprocess_pump(pump1, "펌프장지번주소", "펌프장명")
-pump2 = pump2.rename(columns={"소재지 지번 주소": "주소"}) # pump2 컬럼 이름 통일
-pump2 = pump2.dropna(subset=["주소", "펌프장명", "위도", "경도"])
+# --- 2. 데이터 전처리 ---
+# 행정동 데이터 준비
+geo_gunwi = geo_gyeongbuk[geo_gyeongbuk['adm_nm'].str.contains('경상북도 군위군', na=False)].copy()
+geo_merged = pd.concat([geo_daegu, geo_gunwi], ignore_index=True)
+geo_merged = gpd.GeoDataFrame(geo_merged, crs=geo_daegu.crs)
+geo_merged['adm_nm'] = geo_merged['adm_nm'].str.strip().str.replace('경상북도 군위군', '군위군', regex=False)
 
-# 펌프장 데이터 합치기 + 중복 제거
-pump_all = pd.concat([pump, pump1, pump2], ignore_index=True).drop_duplicates()
+# 펌프장 데이터 준비
+pump_df.dropna(subset=['설치년도', '위도 (Latitude)', '경도 (Longitude)'], inplace=True)
+pump_df['설치년도'] = pd.to_numeric(pump_df['설치년도'], errors='coerce')
 
-# GeoDataFrame으로 변환
-hazard_gdf = gpd.GeoDataFrame(hazard, geometry=gpd.points_from_xy(hazard['경도'], hazard['위도']), crs="EPSG:4326")
-pump_gdf = gpd.GeoDataFrame(pump_all, geometry=gpd.points_from_xy(pump_all['경도'], pump_all['위도']), crs="EPSG:4326")
+# 펌프장 위치 데이터(GeoDataFrame) 생성 및 좌표계 통일
+pump_gdf = gpd.GeoDataFrame(
+    pump_df,
+    geometry=gpd.points_from_xy(pump_df['경도 (Longitude)'], pump_df['위도 (Latitude)']),
+    crs="EPSG:4326"
+).to_crs(geo_merged.crs)
 
-#########################################################################
-# 4. 행정동별 시설 개수 집계
-# -----------------------------------------------------------------------
-hazard_join = gpd.sjoin(hazard_gdf, geo_merged, how="left", predicate="within")
+# 공간 결합으로 행정동별 펌프장 정보 집계
 pump_join = gpd.sjoin(pump_gdf, geo_merged, how="left", predicate="within")
 
-hazard_count = hazard_join.groupby("adm_nm").size().reset_index(name="risk_count")
-pump_count = pump_join.groupby("adm_nm").size().reset_index(name="pump_count")
+# ======================== ✨ 핵심 수정 부분 ✨ ========================
+# 1. 행정동별 '가장 오래된 설치년도' 찾기
+oldest_pump = pump_join.groupby("adm_nm")['설치년도'].min().reset_index()
+oldest_pump.rename(columns={'설치년도': 'oldest_pump_year'}, inplace=True)
+
+# 2. 현재 연도 기준 '경과년수'를 위험 점수로 변환 (오래될수록 점수가 높음)
+current_year = pd.to_datetime('today').year
+oldest_pump['risk_score'] = current_year - oldest_pump['oldest_pump_year']
+# ======================================================================
+
+# 3. 행정동별 펌프장 상세 정보 문자열 생성 (툴팁용)
+def format_pump_details(df_group):
+    details = [f"{row['펌프장명']} ({int(row['설치년도'])}년)" for idx, row in df_group.iterrows()]
+    return '<br>'.join(details)
+pump_details = pump_join.groupby("adm_nm").apply(format_pump_details).reset_index(name="pump_details")
+
+# --- 3. 최종 데이터 통합 ---
+df = geo_merged.merge(oldest_pump, on="adm_nm", how="left")
+df = df.merge(pump_details, on="adm_nm", how="left")
+df['risk_score'].fillna(0, inplace=True) # 펌프장 없는 지역은 0점
+df['pump_details'].fillna("펌프장 정보 없음", inplace=True)
+df['oldest_pump_year'].fillna("없음", inplace=True)
+
+
+# --- 4. 지도 시각화 ---
+m = folium.Map(location=[35.87, 128.6], zoom_start=11)
+
+# [역할 1] 배경색 Choropleth 레이어 (위험 점수 기준)
+folium.Choropleth(
+    geo_data=df,
+    data=df,
+    columns=["adm_nm", "risk_score"],
+    key_on="feature.properties.adm_nm",
+    fill_color="YlOrRd",
+    fill_opacity=0.7,
+    line_opacity=0.5,
+    legend_name="가장 오래된 펌프장의 경과년수 (높을수록 위험)"
+).add_to(m)
+
+# [역할 2] 툴팁, 테두리선, 하이라이트 GeoJson 레이어
+tooltip = folium.features.GeoJsonTooltip(
+    fields=['adm_nm', 'risk_score', 'pump_details'],
+    aliases=['<b>행정동:</b>', '<b>최고 경과년수:</b>', '<b>설치된 펌프장:</b>'],
+    style=("background-color: white; color: #333333; font-family: arial; font-size: 12px; padding: 10px;"),
+    sticky=True
+)
+
+folium.GeoJson(
+    df,
+    style_function=lambda x: {'fillColor': 'transparent', 'color': 'transparent', 'weight': 0.5},
+    highlight_function=lambda x: {'color': 'black', 'weight': 2},
+    tooltip=tooltip
+).add_to(m)
+
+folium.LayerControl().add_to(m)
+
+# m.save("대구_펌프장_최고노후도_지도.html")
+# print("지도 생성이 완료되었습니다: 대구_펌프장_최고노후도_지도.html")
 
 
 ```
 
-## (2)저고도(저지대) 위치 분석
+## (2) 하천 인근 지역
 
 ```{python}
+# 저지대 기준 적용 -> 저지대 도출
+
+# --- 1. 데이터 로드 ---
+# 침수 위험 지역 목록 CSV
+hazard_df = pd.read_csv('.\data\대구_침수위험지역_하천 포함2_좌표.csv')
+
+# 행정구역 경계(GeoJSON) 데이터
+geo_daegu = gpd.read_file(".\data\hangjeongdong_대구광역시.geojson")
+geo_gyeongbuk = gpd.read_file(".\data\hangjeongdong_경상북도.geojson")
+
+
+# --- 2. 데이터 준비 ---
+# 군위군 데이터를 대구시에 병합
+geo_gunwi = geo_gyeongbuk[geo_gyeongbuk['adm_nm'].str.contains('경상북도 군위군', na=False)].copy()
+geo_merged = pd.concat([geo_daegu, geo_gunwi], ignore_index=True)
+geo_merged = gpd.GeoDataFrame(geo_merged, crs=geo_daegu.crs)
+geo_merged['adm_nm'] = geo_merged['adm_nm'].str.strip().str.replace('경상북도 군위군', '군위군', regex=False)
+
+
+# --- 3. 위험 점수 생성 ---
+# 위험 지역 목록에 있는 행정동 이름을 리스트로 만듭니다.
+# '대구광역시'를 추가하여 geo_merged의 이름 형식과 통일합니다.
+hazard_list = ['대구광역시 ' + name for name in hazard_df['행정구역']]
+gunwi_list = [name for name in hazard_df['행정구역'] if '군위군' in name]
+hazard_list.extend(gunwi_list)
+
+
+# geo_merged 데이터프레임에 'risk_score' 컬럼을 추가합니다.
+# 위험 지역 목록에 포함되어 있으면 1점, 아니면 0점을 부여합니다.
+geo_merged['risk_score'] = geo_merged['adm_nm'].apply(lambda x: 1 if x in hazard_list else 0)
+
+
+# --- 4. 지도 시각화 ---
+m = folium.Map(location=[35.8714, 128.6014], zoom_start=11)
+
+# [역할 1] 배경색 Choropleth 레이어
+folium.Choropleth(
+    geo_data=geo_merged,
+    data=geo_merged,
+    columns=['adm_nm', 'risk_score'],
+    key_on='feature.properties.adm_nm',
+    fill_color='YlOrRd',
+    fill_opacity=0.7,
+    line_opacity=0.5,
+    legend_name='침수 위험도 (1: 위험 지역)'
+).add_to(m)
+
+# [역할 2] 툴팁 및 경계선 표시
+tooltip = folium.features.GeoJsonTooltip(
+    fields=['adm_nm'],
+    aliases=['행정동:'],
+    style=("background-color: white; color: #333333; font-family: arial; font-size: 12px; padding: 10px;")
+)
+
+folium.GeoJson(
+    geo_merged,
+    style_function=lambda x: {
+        'fillOpacity': 0,
+        'color': 'black',
+        'weight': 0.5
+    },
+    tooltip=tooltip
+).add_to(m)
+
+
+# --- 5. 저장 ---
+folium.LayerControl().add_to(m)
+# m.save('하천 인근 지역_map.html')
+# print("🎉 침수 위험 지역이 색상으로 표시된 지도가 '하천 인근 지역_map.html' 파일로 저장되었습니다.")
 
 ```
 
 # \[결론\]
+
+```{python}
+# 동일가중치 -> 종합점수 -> 시각화
+# 가중치는 탭 하나 해서 조절 가능하게
+
+```
+
+```{python}
+# 위험점수 높은지역/낮은지역 구분 -> 지역별로 비교분석
+# 위험도 점수 히스토그램 -> 낮은지역, 높은지역 뽑아서 비교
+# 비교: 각 인자별로 어떤 특성때문에 점수가 낮/높게 나오는지
+
+
+
+# + 대구시 지리, 인구, 날씨 외 다른 요인이 있을 수 있으니까, 침수 위험이 높은 지역 기준으로
+# 기사 등등등 기타 중요 요인 찾아보기 -> 해결책 제시/도출(해결책은 구체적이지 않아도 ~~~ 방안이 있을 것이다 제시)
+```
 
 ## 과거 재난 지역 대비
 
@@ -970,99 +1406,8 @@ pump_count = pump_join.groupby("adm_nm").size().reset_index(name="pump_count")
 데이터 분석을 통한 위험지역 도출 후 실제 위험지역과 대비를 통한 검증 데이터로 활용 예정
 
 ```{python}
-pd.read_csv('./data/대구광역시_재해위험지구_통합.csv', encoding='cp949')  
-```
-
-# 
-
-## () 대구시 내 인구 밀도에 따른 위험도 분석 - 읍면동 단위
-
-```{python}
-# 인구지도
+pd.read_csv('./data/대구광역시_재해위험지구_통합.csv', encoding='cp949')
 
 
-```
-
-```{python}
-# 인구 + 배수펌프
-
-#########################################################################
-# 5. 모든 데이터 통합
-# -----------------------------------------------------------------------
-df = geo_merged.merge(pop[['adm_nm','인구밀도']], on="adm_nm", how="left")
-df = df.merge(hazard_count, on="adm_nm", how="left")
-df = df.merge(pump_count, on="adm_nm", how="left")
-
-# 병합 후 발생할 수 있는 NaN(누락값)을 0으로 채우기
-df[['인구밀도', 'risk_count', 'pump_count']] = df[['인구밀도', 'risk_count', 'pump_count']].fillna(0)
-
-#########################################################################
-# ✨ [수정 2] 안전한 정규화 (0으로 나누기 방지)
-# -----------------------------------------------------------------------
-for col in ['인구밀도', 'risk_count', 'pump_count']:
-    min_val = df[col].min()
-    max_val = df[col].max()
-    
-    # 최댓값과 최솟값이 같으면(모든 값이 동일하면) 분모가 0이 되므로 예외 처리
-    if (max_val - min_val) > 0:
-        df[col + '_norm'] = (df[col] - min_val) / (max_val - min_val)
-    else:
-        # 모든 값이 같을 경우 정규화 값은 0으로 설정
-        df[col + '_norm'] = 0
-
-#########################################################################
-# 7. 위험 스코어 계산
-# -----------------------------------------------------------------------
-df['risk_score'] = 0.4 * df['인구밀도_norm'] + 0.5 * df['risk_count_norm'] - 0.1 * df['pump_count_norm']
-
-#########################################################################
-# 8. 지도 시각화
-# -----------------------------------------------------------------------
-m = folium.Map(location=[35.87, 128.6], zoom_start=10)
-
-folium.Choropleth(
-    geo_data=df,  # GeoDataFrame을 직접 전달하는 것을 권장
-    data=df,
-    columns=["adm_nm", "risk_score"],
-    key_on="feature.properties.adm_nm",
-    fill_color="YlOrRd",
-    fill_opacity=0.7,
-    line_opacity=0.5,
-    legend_name="침수 위험 스코어"
-).add_to(m)
-
-# 지도 저장
-m.save("대구_침수위험스코어_완성.html")
-
-print("지도 생성이 완료되었습니다: 대구_침수위험스코어_완성.html")
-```
-
-## () 대구시 내 어린이 인구 밀도에 따른 위험도 분석 - 읍면동 단위
-
-```{python}
-# 인구지도
-```
-
-```{python}
-# 인구 + 배수펌프
-```
-
-## () 대구시 내 고령자 인구 밀도에 따른 위험도 분석 - 읍면동 단위
-
-```{python}
-# 인구지도
-```
-
-```{python}
-# 인구 + 배수펌프
-```
-
-## () 대구시 내 외국인 인구 밀도에 따른 위험도 분석 - 읍면동 단위
-
-```{python}
-# 인구지도
-```
-
-```{python}
-# 인구 + 배수펌프
+# 실제 침수 데이터랑 매칭이 되는지 점검 -> 동으로 분석 진행(예정)
 ```
