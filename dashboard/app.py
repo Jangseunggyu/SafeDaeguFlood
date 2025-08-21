@@ -1,4 +1,3 @@
-
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -25,14 +24,13 @@ plt.rcParams['axes.unicode_minus'] = False
 import plotly.express as px
 import plotly.graph_objects as go
 import geopandas as gpd
-import json 
+import json
 import folium
 
 from sklearn.preprocessing import MinMaxScaler
 scaler = MinMaxScaler()
 
 import math
-import pandas as pd
 from pathlib import Path
 
 from faicons import icon_svg
@@ -47,7 +45,7 @@ from shared import geo, geo2, geo_merged
 from shared import pump_df, oldest_pump, pump_details
 from shared import elevation
 
-from shared import geo_merged
+from shared import geo_merged  # (중복 import 허용)
 
 import io
 from shiny import App, ui, render, reactive
@@ -55,169 +53,439 @@ from shiny.express import output, input, render, ui
 from shiny.ui import page_navbar, nav_panel
 from functools import partial
 
-
 from shinywidgets import render_widget
 import ipyleaflet as ipyl
-
-# import streamlit as st
-
 from folium.plugins import MarkerCluster
-#############################
+from shiny.express import ui as xui
 
 
+# =========================
+# 0) 읍면동 정규화 유틸 & 하이라이트 목록 (상단 선언)
+# =========================
+def norm_dong(name: str) -> str:
+    """읍면동 이름 표준화: 공백 제거, 구분자 통일(, . ･ ㆍ -> ·), 특수 케이스 매핑"""
+    if pd.isna(name):
+        return ""
+    s = str(name).strip()
+    s = s.replace(" ", "")
+    s = s.replace("･", "·").replace(",", "·").replace(".", "·").replace("ㆍ", "·")
+    mapping = {
+        "두류1·2동": "두류1·2동",
+        "두류1,2동": "두류1·2동",
+        "두류1.2동": "두류1·2동",
+        "신천1,2동": "신천1·2동",
+        "신천1.2동": "신천1·2동",
+    }
+    return mapping.get(s, s)
 
+# geo_merged에 병합 키 추가(앱 시작 시 1회)
+geo_merged = geo_merged.copy()
+geo_merged["dong_key"] = geo_merged["읍면동"].apply(norm_dong)
+
+# 하이라이트할 읍면동 목록 (하천 인근으로 사용하는 리스트)
+highlight_dong_list = [
+    '신당동','다사읍','관문동','상중이동','비산7동','노원동','무태조야동','침산1동',
+    '산격2동','검단동','불로·봉무동','북현2동','지저동','신암5동','효목1동','동촌동',
+    '만촌1동','방촌동','고산2동','안심2동','안심1동','안심4동','고산3동','안심3동',
+    '침산3동','산격1동','침산2동','산격4동','칠성동','대현동','신암2동','동인동',
+    '신천1·2동','수성4가동','삼덕동','대봉1동','수성1가동','이천동','중동','봉덕2동',
+    '상동','파동','가창면'
+]
+highlight_dong_df = pd.DataFrame(highlight_dong_list, columns=['읍면동'])
+river_set_norm = set(highlight_dong_df["읍면동"].dropna().astype(str).apply(norm_dong))
+
+# =========================
+# 공용: HTML 범례 유틸
+# =========================
+def add_html_legend(m, title, items, position="bottomright"):
+    """
+    Folium 지도에 간단한 HTML 범례를 추가합니다.
+    - items: [(label, color), ...]
+    - position: 'bottomright' | 'bottomleft' | 'topright' | 'topleft'
+    """
+    vpos, hpos = ("bottom", "right")
+    if position == "bottomleft": vpos, hpos = ("bottom", "left")
+    elif position == "topright": vpos, hpos = ("top", "right")
+    elif position == "topleft": vpos, hpos = ("top", "left")
+
+    rows = ""
+    for label, color in items:
+        rows += (
+            "<div style='display:flex;align-items:center;gap:8px;margin:2px 0;'>"
+            f"<span style='display:inline-block;width:12px;height:12px;background:{color};"
+            "border:1px solid #333;'></span>"
+            f"<span style='font-size:12px;'>{label}</span>"
+            "</div>"
+        )
+
+    html = (
+        f"<div style='position: fixed; z-index: 9999; {vpos}: 28px; {hpos}: 28px;'>"
+        "<div style='background: rgba(255,255,255,0.92); padding:10px 12px; "
+        "box-shadow:0 2px 6px rgba(0,0,0,0.2); border-radius:8px; "
+        "border:1px solid #e0e0e0; min-width: 160px;'>"
+        f"<div style='font-weight:700; margin-bottom:6px; font-size:13px;'>{title}</div>"
+        f"{rows}"
+        "</div></div>"
+    )
+    m.get_root().html.add_child(folium.Element(html))
+
+# =========================
 # 대시보드 타이틀
+# =========================
 ui.page_opts(title="대구광역시 내 침수 위험 지역 도출", fillable=True)
 
-
-
+# =========================
 # 6개 탭 구성
+# =========================
 with ui.navset_pill(id="tab"):
 
+    # -----------------------------------
+    # Tab 1: 결론/가중치 → 지도/검증
+    # -----------------------------------
+    with ui.nav_panel("침수 주의 지역 도출"):
+        
+        with ui.layout_columns(col_widths=(4, 6), gap="1.25rem", class_="align-items-center"):
 
-    with ui.nav_panel("결론: 리스크 스코어 -> 종류 선택, 가중치 슬라이드"):
-        "가중치 -> 종합점수 -> 지도 시각화 + 검증(2016-2025 실제 사고 지역 읍동면 출력)"
-                    
-        with ui.layout_columns():
-            with ui.card():
+            # (좌) 가중치 슬라이더
+            with ui.card(class_="mx-auto h-100", style="min-width:260px; max-width:360px;"):
                 ui.card_header("가중치 슬라이더")
 
-                # 1. 슬라이더 정의 (0 ~ 10 사이 가중치 부여 가능)
+                ui.input_action_button(
+                    "btn3", "사용 방법", class_="btn-success",
+                    style="font-size:13px; white-space:nowrap;"
+                )
+
+                @reactive.effect
+                @reactive.event(input.btn3)
+                def show_modal_btn3():
+                    ui.modal_show(ui.modal(
+                        ui.tags.img(src="howtouse.png", style="width:100%; height:auto;"),
+                        title="",
+                        easy_close=True,
+                        footer=ui.modal_button("닫기"),
+                        size="l"
+                    ))
+
                 # --- 날씨 요인 ---
-                ui.h5("🌧️ 날씨 요인")
-                ui.input_slider("w_rain", "강수량 리스크", min=0, max=10, value=5)
+                ui.h5("날씨 요인")
+                ui.input_slider("w_rain", "강수량 리스크", min=0, max=10, value=9)
 
                 # --- 지리적 요인 ---
-                ui.h5("🗺️ 지리적 요인")
-                ui.input_slider("w_pump", "빗물펌프장 리스크", min=0, max=10, value=5)
-                ui.input_slider("w_lowland", "저지대 리스크", min=0, max=10, value=5)  # 새 추가
+                ui.h5("지리적 요인")
+                ui.input_slider("w_pump", "빗물펌프장 리스크", min=0, max=10, value=6)
+                ui.input_slider("w_lowland", "저지대 리스크", min=0, max=10, value=8)
+                ui.input_slider("w_river", "하천 리스크", min=0, max=10, value=10)
 
                 # --- 인구 요인 ---
-                ui.h5("👥 인구 요인")
-                ui.input_slider("w_dens", "총 인구밀도", min=0, max=10, value=5)
-                ui.input_slider("w_child", "어린이 인구밀도", min=0, max=10, value=5)
-                ui.input_slider("w_old", "고령자 인구밀도", min=0, max=10, value=5)
-                ui.input_slider("w_foreign", "외국인 인구밀도", min=0, max=10, value=5)
+                ui.h5("인구 요인")
+                ui.input_slider("w_dens", "총 인구밀도", min=0, max=10, value=3)
+                ui.input_slider("w_child", "어린이 인구밀도", min=0, max=10, value=2)
+                ui.input_slider("w_old", "고령자 인구밀도", min=0, max=10, value=2)
+                ui.input_slider("w_foreign", "외국인 인구밀도", min=0, max=10, value=1)
 
+            # (우) 지도 + Top10 차트
             with ui.card():
                 ui.card_header("리스크 스코어 지도")
 
                 @render.ui
                 def risk_map():
-                    # ---- 데이터 준비 ----
-                    df = pd.DataFrame()
-                    df["읍면동"] = rainy_risk_dong["읍면동"]
+                    # ---- (A) 지도 기준 DF: geo_merged의 모든 동을 기준 ----
+                    df = pd.DataFrame({"읍면동": geo_merged["읍면동"]})
+                    df["dong_key"] = df["읍면동"].apply(norm_dong)
 
-                    df["rain"] = rainy_risk_dong["RiskScore_norm"]
-                    df["pump"] = oldest_pump["risk_score_norm"]
-                    df["lowland"] = elevation["elevation_diff_norm"]  # 새로 추가
-                    df["dens"] = dens["인구밀도_norm"]
-                    df["child"] = age_dong["어린이 인구밀도_norm"]
-                    df["old"] = age_dong["고령자 인구밀도_norm"]
-                    df["foreign"] = fore_dong["외국인 인구밀도_norm"]
+                    # ---- (B) 각 지표를 정규화 키로 병합 ----
+                    def attach_metric(left, right, col_name):
+                        tmp = right[["읍면동", col_name]].copy()
+                        tmp["dong_key"] = tmp["읍면동"].apply(norm_dong)
+                        return left.merge(tmp[["dong_key", col_name]], on="dong_key", how="left")
 
-                    df = df.fillna(0)
+                    df = attach_metric(df, rainy_risk_dong, "RiskScore_norm")        # rain
+                    df = attach_metric(df, oldest_pump,    "risk_score_norm")        # pump
+                    df = attach_metric(df, elevation,      "elevation_diff_norm")    # lowland
+                    df = attach_metric(df, dens,           "인구밀도_norm")          # dens
 
-                    # ---- 가중치 반영 ----
+                    tmp_age = age_dong[["읍면동","어린이 인구밀도_norm","고령자 인구밀도_norm"]].copy()
+                    tmp_age["dong_key"] = tmp_age["읍면동"].apply(norm_dong)
+                    df = df.merge(
+                        tmp_age[["dong_key","어린이 인구밀도_norm","고령자 인구밀도_norm"]],
+                        on="dong_key", how="left"
+                    )
+
+                    df = attach_metric(df, fore_dong,      "외국인 인구밀도_norm")   # foreign
+
+                    # 별칭 정리
+                    df.rename(columns={
+                        "RiskScore_norm": "rain",
+                        "risk_score_norm": "pump",
+                        "elevation_diff_norm": "lowland",
+                        "인구밀도_norm": "dens",
+                        "어린이 인구밀도_norm": "child",
+                        "고령자 인구밀도_norm": "old",
+                        "외국인 인구밀도_norm": "foreign",
+                    }, inplace=True)
+
+                    # ---- (C) 하천 리스크(포함=10, 미포함=0) ----
+                    df["river"] = df["dong_key"].apply(lambda x: 10 if x in river_set_norm else 0)
+
+                    # NaN -> 0
+                    for c in ["rain","pump","lowland","dens","child","old","foreign"]:
+                        if c in df.columns:
+                            df[c] = df[c].fillna(0)
+
+                    # ---- (D) 가중치 반영 ----
                     df["risk_score"] = (
-                        df["rain"] * (input.w_rain() or 0)
-                        + df["pump"] * (input.w_pump() or 0)
-                        + df["lowland"] * (input.w_lowland() or 0)  # 새로 포함
-                        + df["dens"] * (input.w_dens() or 0)
-                        + df["child"] * (input.w_child() or 0)
-                        + df["old"] * (input.w_old() or 0)
+                        df["rain"]      * (input.w_rain()    or 0)
+                        + df["pump"]    * (input.w_pump()    or 0)
+                        + df["lowland"] * (input.w_lowland() or 0)
+                        + df["river"]   * (input.w_river()   or 0)
+                        + df["dens"]    * (input.w_dens()    or 0)
+                        + df["child"]   * (input.w_child()   or 0)
+                        + df["old"]     * (input.w_old()     or 0)
                         + df["foreign"] * (input.w_foreign() or 0)
                     )
 
-                    # ---- 지도 시각화 ----
+                    # ---- (E) 지도 시각화(키로 병합) ----
                     m = folium.Map(location=[35.87, 128.6], zoom_start=11)
-                    merged = geo_merged.merge(df, left_on="읍면동", right_on="읍면동", how="left")
+
+                    merged = geo_merged.merge(
+                        df[["dong_key","risk_score","river"]], on="dong_key", how="left"
+                    )
 
                     vmin = merged["risk_score"].min()
                     vmax = merged["risk_score"].max()
-                    if vmin == vmax:
+                    if pd.isna(vmin) or pd.isna(vmax) or vmin == vmax:
                         vmin, vmax = 0, 1
 
                     colormap = folium.LinearColormap(
                         colors=["#f7fbff", "#6baed6", "#08306b"],
-                        vmin=vmin,
-                        vmax=vmax,
-                        caption="종합 리스크 스코어"
+                        vmin=vmin, vmax=vmax, caption="종합 리스크 스코어"
                     )
 
+                    # --------- ① 기본 리스크 스코어 색상 ---------
                     folium.GeoJson(
                         merged.to_json(),
                         style_function=lambda feature: {
-                            "fillColor": colormap(feature["properties"]["risk_score"]) if feature["properties"]["risk_score"] is not None else "transparent",
+                            "fillColor": colormap(feature["properties"].get("risk_score"))
+                                        if feature["properties"].get("risk_score") is not None
+                                        else "transparent",
                             "color": "black",
                             "weight": 1,
                             "fillOpacity": 0.7,
                         },
                         tooltip=folium.GeoJsonTooltip(
-                            fields=["읍면동", "risk_score"],
-                            aliases=["읍면동", "리스크 스코어"],
+                            fields=["읍면동", "risk_score", "river"],
+                            aliases=["읍면동", "리스크 스코어", "하천 리스크(0/10)"],
                             localize=True
                         )
                     ).add_to(m)
 
+                    # --------- ② SVG 패턴 추가 (빗금) ---------
+                    pattern = """
+                    <svg height="0" width="0">
+                    <defs>
+                        <pattern id="diagonalHatch" patternUnits="userSpaceOnUse" width="10" height="10">
+                        <path d="M0,6 l6,-6
+                                M-1,1 l2,-2
+                                M5,7 l2,-2" 
+                                style="stroke:red; stroke-width:1" />
+                        </pattern>
+                    </defs>
+                    </svg>
+                    """
+                    m.get_root().html.add_child(folium.Element(pattern))
+
+                    # --------- ③ 실제 침수 사고 지역 (빗금 처리) ---------
+                    flood_areas = [
+                        "이천동","신암동","칠성동","두산동","다사읍","현풍면","태전동","매호동",
+                        "서호동","가창면","효령면","동촌동","관문동","두류동","죽전동","감삼동",
+                        "유천동","삼국유사면","침산동","비산7동","신암2동"
+                    ]
+
+                    folium.GeoJson(
+                        merged[merged["읍면동"].isin(flood_areas)].to_json(),
+                        style_function=lambda feature: {
+                            "fillColor": "url(#diagonalHatch)",  # 내부 빗금 채우기
+                            "color": "red",                      # 경계선 빨강
+                            "weight": 2,
+                            "fillOpacity": 0.6
+                        },
+                        tooltip=folium.GeoJsonTooltip(
+                            fields=["읍면동"],
+                            aliases=["실제 침수 사고 지역"],
+                            localize=True
+                        )
+                    ).add_to(m)
+
+                    # --------- ④ 범례 추가 ---------
                     colormap.add_to(m)
+
+                    legend_html = """
+                    <div style="
+                        position: fixed;
+                        bottom: 0px; left: 0px; width: 200px; height: 80px;
+                        border:2px solid grey; z-index:9999; font-size:14px;
+                        background-color:white; padding: 8px;">
+                    <b>범례</b><br>
+                    <span style="background:url(#diagonalHatch); color:red; font-weight:bold;">■■</span> 실제 침수 사고 지역
+                    </div>
+                    """
+                    m.get_root().html.add_child(folium.Element(legend_html))
+
+                    # --------- ⑤ UI 출력 ---------
                     return ui.HTML(m._repr_html_())
 
                 @render.plot
                 def risk_top10_plot():
-                    merged = geo_merged.copy()
-                    merged = merged.merge(rainy_risk_dong[['읍면동', 'RiskScore_norm']], on='읍면동', how='left')
-                    merged = merged.merge(oldest_pump[['읍면동', 'risk_score_norm']], on='읍면동', how='left')
-                    merged = merged.merge(elevation[['읍면동', 'elevation_diff_norm']], on='읍면동', how='left')  # 추가
-                    merged = merged.merge(dens[['읍면동', '인구밀도_norm']], on='읍면동', how='left')
-                    merged = merged.merge(age_dong[['읍면동', '어린이 인구밀도_norm', '고령자 인구밀도_norm']], on='읍면동', how='left')
-                    merged = merged.merge(fore_dong[['읍면동', '외국인 인구밀도_norm']], on='읍면동', how='left')
+                    # 지도와 동일 로직으로 스코어 계산(일관성)
+                    base = pd.DataFrame({"읍면동": geo_merged["읍면동"]})
+                    base["dong_key"] = base["읍면동"].apply(norm_dong)
 
-                    merged["종합리스크"] = (
-                        input.w_rain() * merged["RiskScore_norm"] +
-                        input.w_pump() * merged["risk_score_norm"] +
-                        input.w_lowland() * merged["elevation_diff_norm"] +  # 새로 포함
-                        input.w_dens() * merged["인구밀도_norm"] +
-                        input.w_child() * merged["어린이 인구밀도_norm"] +
-                        input.w_old() * merged["고령자 인구밀도_norm"] +
-                        input.w_foreign() * merged["외국인 인구밀도_norm"]
+                    def attach_metric(left, right, col_name):
+                        tmp = right[["읍면동", col_name]].copy()
+                        tmp["dong_key"] = tmp["읍면동"].apply(norm_dong)
+                        return left.merge(tmp[["dong_key", col_name]], on="dong_key", how="left")
+
+                    base = attach_metric(base, rainy_risk_dong, "RiskScore_norm")        # rain
+                    base = attach_metric(base, oldest_pump,    "risk_score_norm")        # pump
+                    base = attach_metric(base, elevation,      "elevation_diff_norm")    # lowland
+                    base = attach_metric(base, dens,           "인구밀도_norm")          # dens
+
+                    tmp_age = age_dong[["읍면동","어린이 인구밀도_norm","고령자 인구밀도_norm"]].copy()
+                    tmp_age["dong_key"] = tmp_age["읍면동"].apply(norm_dong)
+                    base = base.merge(
+                        tmp_age[["dong_key","어린이 인구밀도_norm","고령자 인구밀도_norm"]],
+                        on="dong_key", how="left"
                     )
 
-                    top10 = merged[['읍면동', '종합리스크']].sort_values(by="종합리스크", ascending=False).head(10)
+                    base = attach_metric(base, fore_dong,      "외국인 인구밀도_norm")   # foreign
 
-                    fig, ax = plt.subplots(figsize=(8,6))
-                    ax.barh(top10['읍면동'], top10['종합리스크'], color='tomato')
+                    base.rename(columns={
+                        "RiskScore_norm": "rain",
+                        "risk_score_norm": "pump",
+                        "elevation_diff_norm": "lowland",
+                        "인구밀도_norm": "dens",
+                        "어린이 인구밀도_norm": "child",
+                        "고령자 인구밀도_norm": "old",
+                        "외국인 인구밀도_norm": "foreign",
+                    }, inplace=True)
+
+                    base["river_risk"] = base["dong_key"].apply(lambda x: 10 if x in river_set_norm else 0)
+
+                    for c in ["rain","pump","lowland","dens","child","old","foreign"]:
+                        if c in base.columns:
+                            base[c] = base[c].fillna(0)
+
+                    base["종합리스크"] = (
+                        (input.w_rain()    or 0) * base["rain"] +
+                        (input.w_pump()    or 0) * base["pump"] +
+                        (input.w_lowland() or 0) * base["lowland"] +
+                        (input.w_river()   or 0) * base["river_risk"] +
+                        (input.w_dens()    or 0) * base["dens"] +
+                        (input.w_child()   or 0) * base["child"] +
+                        (input.w_old()     or 0) * base["old"] +
+                        (input.w_foreign() or 0) * base["foreign"]
+                    )
+
+                    top10 = base[['읍면동', '종합리스크']].dropna().sort_values(
+                        by="종합리스크", ascending=False
+                    ).head(10)
+
+                    fig, ax = plt.subplots(figsize=(8, 6))
+                    ax.barh(top10['읍면동'], top10['종합리스크'])
                     ax.set_xlabel("종합 위험 점수")
                     ax.set_ylabel("읍면동")
                     ax.set_title("고위험 Top 10 읍면동")
                     ax.invert_yaxis()
                     ax.grid(axis='x', linestyle='--', alpha=0.7)
-
                     return fig
 
-
-
-
+    # -----------------------------------
+    # Tab 2: 서론
+    # -----------------------------------
     with ui.nav_panel("서론"):
+
+        # ---------------- 첫 번째 카드 : 뉴스 3개 가로 배치 ----------------
+        with ui.card():
+            ui.card_header("최근 뉴스")
+
+            with ui.layout_columns(col_widths=[4, 4, 4]):   # 3등분
+                # 뉴스 1
+                ui.tags.a(
+                    ui.tags.img(
+                        src="뉴스1.png",
+                        style="width:100%; height:auto; margin-bottom:10px;"
+                    ),
+                    href="https://dgmbc.com/article/azqZOCv4cN?utm_",
+                    target="_blank"
+                )
+
+                # 뉴스 2
+                ui.tags.a(
+                    ui.tags.img(
+                        src="뉴스2.png",
+                        style="width:100%; height:auto; margin-bottom:10px;"
+                    ),
+                    href="https://www.newsis.com/view/NISX20250717_0003256028?utm_",
+                    target="_blank"
+                )
+
+                # 뉴스 3
+                ui.tags.a(
+                    ui.tags.img(
+                        src="뉴스3.png",
+                        style="width:100%; height:auto; margin-bottom:10px;"
+                    ),
+                    href="https://www.ynenews.kr/news/articleView.html?idxno=66722&utm_",
+                    target="_blank"
+                )
+
+
+    # ---------------- 두 번째 카드 : 이미지 2개 가로 배치 ----------------
+        with ui.card():
+            ui.card_header("주제선정배경")
+
+            with ui.layout_columns(col_widths=[6, 6]):   # 2등분
+                # intro 1
+                ui.tags.img(
+                    src="intro1.png",
+                    style="width:100%; height:auto; margin-bottom:10px;"
+                )
+
+                # intro 2
+                ui.tags.img(
+                    src="intro2.png",
+                    style="width:100%; height:auto; margin-bottom:10px;"
+                )
+
+    # -----------------------------------
+    # Tab 3: 날씨
+    # -----------------------------------
+    with ui.nav_panel("강수량 분석"):
         with ui.layout_columns():
 
             with ui.card():
-                ui.card_header("뉴스")
-                ui.p("이곳에 뉴스 관련 내용을 추가합니다.")
+                ui.card_header("대구시 장마기간에 의한 침수 위험도 분석")
 
-            with ui.card():
-                ui.card_header("주제선정배경")
-                ui.p("이곳에 주제 선정 배경 관련 내용을 추가합니다.")
+                # plot 1
+                ui.tags.img(
+                    src="plot1.png",
+                    style="width:100%; height:auto; margin-bottom:10px;"
+                )
+
+                # plot 2
+                ui.tags.img(
+                    src="plot2.png",
+                    style="width:100%; height:auto; margin-bottom:10px;"
+                )
+
+                # plot 3
+                ui.tags.img(
+                    src="plot3.png",
+                    style="width:100%; height:auto; margin-bottom:10px;"
+                )
 
 
 
-
-    with ui.nav_panel("날씨"):
-        with ui.layout_columns():
-
-            with ui.card():
-                ui.card_header("대구시 장마기간")
-                ui.p("기간, 실제 비온날, 강수량")
 
             with ui.card():
                 ui.card_header("행정구별 장마기간 내 강수량")
@@ -238,7 +506,9 @@ with ui.navset_pill(id="tab"):
                     m = folium.Map(location=[35.87, 128.6], zoom_start=11)
 
                     # 연도 데이터 필터링
-                    rainy_season_dong['년도'] = pd.to_datetime(rainy_season_dong['기간시작']).dt.year.astype(str)
+                    rainy_season_dong['년도'] = pd.to_datetime(
+                        rainy_season_dong['기간시작']
+                    ).dt.year.astype(str)
                     df = rainy_season_dong[rainy_season_dong['년도'] == selected_year][['구군', '합계강수량']]
 
                     if df.empty:
@@ -273,7 +543,7 @@ with ui.navset_pill(id="tab"):
                             row.geometry.__geo_interface__,
                             style_function=lambda feature, val=row['합계강수량']: {
                                 "fillColor": colormap(val),
-                                "color": "black",   # 구군 경계 검정색
+                                "color": "black",
                                 "weight": 1,
                                 "fillOpacity": 0.7,
                             },
@@ -284,13 +554,14 @@ with ui.navset_pill(id="tab"):
                     colormap.add_to(m)
                     return ui.HTML(m._repr_html_())
 
-
-
-    with ui.nav_panel("지리"):
+    # -----------------------------------
+    # Tab 4: 지리
+    # -----------------------------------
+    with ui.nav_panel("시설 및 지형 분석"):
         with ui.layout_columns():
+
             with ui.card():
                 ui.card_header("빗물펌프장 위치")
-                
 
                 @render.ui
                 def pump_map_widget():
@@ -309,7 +580,6 @@ with ui.navset_pill(id="tab"):
 
                     # 빗물펌프장 위치 표시
                     for idx, row in pump_df.iterrows():
-                        # 설치년도 NaN 처리 및 소숫점 버림
                         if pd.isna(row['설치년도']):
                             year_str = "알수없음"
                         else:
@@ -321,8 +591,17 @@ with ui.navset_pill(id="tab"):
                             icon=folium.Icon(color='blue', icon='tint', prefix='fa')
                         ).add_to(m)
 
-                    return ui.HTML(m._repr_html_())
+                    # ★ 범례 추가
+                    add_html_legend(
+                        m, "범례",
+                        items=[
+                            ("행정경계(검정선)", "#000000"),
+                            ("빗물펌프장(파란 핀)", "#2A81CB"),
+                        ],
+                        position="bottomright"
+                    )
 
+                    return ui.HTML(m._repr_html_())
 
                 # 행정구 선택
                 ui.input_select(
@@ -334,22 +613,14 @@ with ui.navset_pill(id="tab"):
                 @render.data_frame
                 def pump_table():
                     selected_region = input.pump_region()
-
-                    # pump_df['위치 (주소)']에서 행정구 추출
-                    # 주소에 포함된 행정구 명칭이 있는지 확인
                     mask = pump_df['위치 (주소)'].str.contains(selected_region, na=False)
 
-                    # 필터링된 데이터
                     df_filtered = pump_df.loc[mask, ['펌프장명', '위치 (주소)', '설치년도']].copy()
-
-                    # 설치년도 NaN 및 소숫점 처리
                     df_filtered['설치년도'] = df_filtered['설치년도'].apply(
                         lambda x: int(x) if pd.notna(x) else None
                     )
 
                     return render.DataGrid(df_filtered, height="400px")
-
-
 
             with ui.card():
                 ui.card_header("저지대 지역")
@@ -358,20 +629,21 @@ with ui.navset_pill(id="tab"):
                 def lowland_map():
                     # geo_merged: 지도 데이터 (GeoJSON)
                     # elevation: ['읍면동','elevation','neighbor_avg','elevation_diff']
-                    
+
                     # 지도 생성 (대구 중심)
                     m = folium.Map(location=[35.87, 128.6], zoom_start=11)
 
                     # 지도용 데이터에 고도 정보 병합
                     geo_merged_elev = geo_merged.copy()
-                    geo_merged_elev = geo_merged_elev.merge(elevation[['읍면동','elevation_diff']],
-                                                            left_on='읍면동', right_on='읍면동',
-                                                            how='left')
+                    elev_tmp = elevation[['읍면동','elevation_diff']].copy()
+                    elev_tmp['dong_key'] = elev_tmp['읍면동'].apply(norm_dong)
+                    geo_merged_elev = geo_merged_elev.merge(
+                        elev_tmp[['dong_key','elevation_diff']], on='dong_key', how='left'
+                    )
 
                     # 색상 함수 정의
                     def get_color(elevation_diff):
-                        """고도차에 따른 색상 반환"""
-                        if elevation_diff is None:
+                        if elevation_diff is None or pd.isna(elevation_diff):
                             return '#d3d3d3'  # 값 없는 경우 회색
                         elif elevation_diff < -15:
                             return '#8B0000'      # 다크레드
@@ -404,12 +676,78 @@ with ui.navset_pill(id="tab"):
                         )
                     ).add_to(m)
 
+                    # ★ 범례 추가 (구간 설명)
+                    lowland_items = [
+                        ("< -15 (매우 낮음)", "#8B0000"),
+                        ("-15 ~ -10", "#DC143C"),
+                        ("-10 ~ -5", "#FF0000"),
+                        ("-5 ~ 0", "#FF6347"),
+                        ("0 ~ 5", "#87CEEB"),
+                        ("5 ~ 10", "#4169E1"),
+                        ("≥ 10 (높음)", "#00008B"),
+                        ("값 없음", "#d3d3d3"),
+                    ]
+                    add_html_legend(m, "고도차(주변 대비, m)", lowland_items, position="bottomright")
+
                     return ui.HTML(m._repr_html_())
 
+            with ui.card():
+                ui.card_header("하천 인근 지역")
 
+                @render.ui
+                def river_near_map():
+                    # 지도 생성 (대구 중심)
+                    m = folium.Map(location=[35.87, 128.60], zoom_start=11, control_scale=True)
 
+                    # 스타일 함수: 하이라이트 목록이면 빨강, 아니면 연회색
+                    def style_fn(feature):
+                        dong = feature["properties"].get("읍면동")
+                        dong_key = norm_dong(dong)
+                        if dong_key in river_set_norm:
+                            return {
+                                "fillColor": "#ff4d4f",
+                                "color": "#b32025",
+                                "weight": 1.2,
+                                "fillOpacity": 0.6,
+                            }
+                        else:
+                            return {
+                                "fillColor": "#eeeeee",
+                                "color": "#999999",
+                                "weight": 0.8,
+                                "fillOpacity": 0.25,
+                            }
 
-    with ui.nav_panel("인구"):
+                    # GeoJSON 레이어 추가 (툴팁: 읍면동)
+                    folium.GeoJson(
+                        geo_merged.to_json(),
+                        name="읍·면·동",
+                        style_function=style_fn,
+                        highlight_function=lambda f: {"weight": 2, "color": "#333333"},
+                        tooltip=folium.GeoJsonTooltip(
+                            fields=["읍면동"],
+                            aliases=["읍·면·동"],
+                            localize=True,
+                        ),
+                    ).add_to(m)
+
+                    # ★ 범례 추가
+                    add_html_legend(
+                        m, "하천 인근 지역",
+                        items=[
+                            ("하천 인근 읍·면·동", "#ff4d4f"),
+                            ("기타 지역", "#eeeeee"),
+                        ],
+                        position="bottomright"
+                    )
+
+                    folium.LayerControl(collapsed=False).add_to(m)
+                    return ui.HTML(m._repr_html_())
+
+    # -----------------------------------
+    # Tab 5: 인구
+    # -----------------------------------
+    with ui.nav_panel("인구 분석"):
         with ui.layout_columns():
             with ui.card():
                 ui.card_header("대구광역시 인구 구성"),
@@ -483,9 +821,10 @@ with ui.navset_pill(id="tab"):
                     
                     # Folium 지도 HTML로 변환 후 UI 삽입
                     return ui.HTML(m._repr_html_())
+                
 
             with ui.card():
-                ui.card_header("행정구 내 등록 인구수")
+                ui.card_header("행정구 내 등록 인구 수")
 
                 # 1. 행정구 선택 (Single Select)
                 ui.input_select(
@@ -501,17 +840,14 @@ with ui.navset_pill(id="tab"):
                     selected="총 인구"
                 )
 
-
                 # 3. 그래프 출력
                 @render.plot
                 def population_bar_chart():
                     selected_district = input.selected_district()
                     selected_category = input.selected_category()
 
-                    # 선택한 행정구 필터링
                     df = pop[pop['행정구'] == selected_district].copy()
 
-                    # 분류에 따른 컬럼 매핑
                     category_map = {
                         "총 인구": "인구(명)",
                         "어린이 인구": "어린이수",
@@ -520,46 +856,16 @@ with ui.navset_pill(id="tab"):
                     }
                     value_col = category_map[selected_category]
 
-                    # 읍면동 기준으로 정렬
                     df_sorted = df.sort_values(by=value_col, ascending=True)
-
-                    # 전체 행정구 기준 평균값 계산
                     overall_mean = pop[value_col].mean()
 
-                    # 가로 막대 그래프
                     fig, ax = plt.subplots(figsize=(8,6))
                     ax.barh(df_sorted['읍면동'], df_sorted[value_col], color='skyblue', edgecolor='black')
-                    
-                    # 전체 평균선 추가
                     ax.axvline(overall_mean, color='red', linestyle='--', linewidth=1, label=f'{selected_category} 전체 평균')
-
-                    # 레이블 및 제목
                     ax.set_xlabel(selected_category)
                     ax.set_ylabel('읍면동')
                     ax.set_title(f"{selected_district} - {selected_category}")
                     ax.grid(axis='x', linestyle='--', alpha=0.7)
-
-                    # 범례를 항상 우측 하단으로 고정
                     ax.legend(loc="lower right")
-
                     plt.tight_layout()
                     return fig
-
-
-
-    with ui.nav_panel("결론:히스토그램"):
-        "위험도 점수 히스토그램"
-
-
-
-    # with ui.nav_menu("Other links"):
-    #     with ui.nav_panel("D"):
-    #         "Page D content"
-
-    #     "----"
-    #     "Description:"
-    #     with ui.nav_control():
-    #         ui.a("Shiny", href="https://shiny.posit.co", target="_blank")
-
-
-
