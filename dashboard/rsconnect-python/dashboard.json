@@ -1,0 +1,12 @@
+{
+    "https://api.shinyapps.io": {
+        "server_url": "https://api.shinyapps.io",
+        "filename": "C:\\Users\\USER\\Documents\\DS Projects\\0822 daegu team7\\SafeDaeguFlood\\dashboard",
+        "app_url": "https://hellojin.shinyapps.io/my-app/",
+        "app_id": "15260821",
+        "app_guid": null,
+        "title": "team7_daegu",
+        "app_mode": "python-shiny",
+        "app_store_version": 1
+    }
+}

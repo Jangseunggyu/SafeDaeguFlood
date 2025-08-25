@@ -21,6 +21,45 @@ from scipy.stats import ttest_rel
 plt.rcParams['font.family'] = 'Malgun Gothic'
 plt.rcParams['axes.unicode_minus'] = False
 
+
+from shiny.express import ui, input, render
+from shiny import ui as xui, reactive
+import pandas as pd, re, unicodedata
+import textwrap
+import plotly.express as px
+from shinywidgets import render_plotly
+
+
+import os
+from matplotlib import font_manager
+
+# 앱의 루트 디렉토리 기준
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _set_korean_font():
+    """배포 환경에서도 깨지지 않도록 한글 폰트를 www/fonts에서 강제 설정"""
+    font_path = os.path.join(APP_DIR, "www", "fonts", "NanumGothic-Regular.ttf")
+
+    if os.path.exists(font_path):
+        font_manager.fontManager.addfont(font_path)
+        plt.rcParams["font.family"] = "NanumGothic"   # Matplotlib
+        print(f"✅ 한글 폰트 적용됨: {font_path}")
+    else:
+        print(f"⚠️ 경고: 한글 폰트 파일 없음 → {font_path}")
+        plt.rcParams["font.family"] = "sans-serif"
+
+    # 마이너스 부호 깨짐 방지
+    plt.rcParams["axes.unicode_minus"] = False
+
+    # ✅ Plotly 기본 폰트도 NanumGothic으로 설정
+    import plotly.io as pio
+    pio.templates["nanum"] = pio.templates["plotly_white"].update(
+        layout_font=dict(family="NanumGothic")
+    )
+    pio.templates.default = "nanum"
+
+_set_korean_font()
+
 import plotly.express as px
 import plotly.graph_objects as go
 import geopandas as gpd
